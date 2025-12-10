@@ -1,0 +1,91 @@
+import { z } from "zod";
+
+// --- HJÄLPFUNKTIONER FÖR ATT TOLKA SVENSKA FORMAT ---
+
+const parseSwedishWeight = (val: unknown): number => {
+  if (typeof val === "number") return val;
+  if (!val || typeof val !== 'string') return 0;
+  
+  let str = val.toLowerCase().replace(/\s/g, "");
+  // Hantera "1.500" som 1500 och "1,5" som 1.5
+  str = str.replace(".", "").replace(",", ".");
+
+  const match = str.match(/^([\d.]+)(kilo|kg|g|ton|t)?$/);
+  if (!match) return 0; 
+
+  const value = parseFloat(match[1]);
+  const unit = match[2] || "kg";
+
+  if (unit === "ton" || unit === "t") return value * 1000;
+  if (unit === "g") return value / 1000;
+  return value;
+};
+
+// --- NYA SMARTA FÄLT MED CONFIDENCE ---
+
+// En hjälptyp som skapar ett objekt med { value, confidence }
+// Den är smart nog att hantera om AI:n råkar skicka gamla platta formatet också.
+const createSmartField = <T extends z.ZodTypeAny>(schema: T) => {
+  return z.preprocess(
+    (input) => {
+      // Om input redan är ett objekt med value/confidence, låt det vara
+      if (typeof input === 'object' && input !== null && 'value' in input && 'confidence' in input) {
+        return input;
+      }
+      // Annars, om det är gammalt platt data, konvertera det till nya strukturen med 0 confidence
+      return { value: input, confidence: 0 };
+    },
+    z.object({
+      value: schema,
+      confidence: z.number().min(0).max(1).default(0).catch(0), // Defaulta till 0 om det saknas eller är fel
+    })
+  );
+};
+
+// --- DET NYA SCHEMAT ---
+export const WasteRecordSchema = z.object({
+  // Datum
+  date: createSmartField(
+    z.preprocess((val) => {
+        if (!val) return new Date().toISOString().split("T")[0];
+        return String(val).trim();
+    }, z.string())
+  ),
+  
+  // Material (Sträng)
+  material: createSmartField(
+    z.string()
+      .transform(s => s.trim())
+      .transform(s => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase())
+      .catch("Okänt material") // Fånga fel och sätt fallback
+  ),
+
+  // Vikt (Nummer)
+  weightKg: createSmartField(
+    z.preprocess(parseSwedishWeight, z.number().min(0).catch(0))
+  ),
+
+  // --- NYTT: KOSTNAD (SEK) ---
+  cost: createSmartField(
+    z.preprocess((val) => {
+      if (typeof val === "number") return val;
+      if (!val || typeof val !== 'string') return 0;
+      // Rensa bort "kr", "SEK" och mellanslag. Byt komma mot punkt.
+      const clean = val.replace(/[^\d,.-]/g, "").replace(",", ".");
+      return parseFloat(clean) || 0;
+    }, z.number().catch(0))
+  ),
+
+  // --- NYTT: LEVERANTÖR ---
+  supplier: createSmartField(z.string().catch("")),
+
+  // Adress & Mottagare
+  address: createSmartField(z.string().catch("")),
+  receiver: createSmartField(z.string().catch("")),
+});
+
+// Typen för TypeScript
+export type WasteRecord = z.infer<typeof WasteRecordSchema>;
+
+// En hjälptyp för att enkelt komma åt värdet i UI:t
+export type SmartFieldValue<T> = { value: T; confidence: number } | undefined;
