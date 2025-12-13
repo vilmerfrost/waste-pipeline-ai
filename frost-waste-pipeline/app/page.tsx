@@ -2,7 +2,8 @@
 export const dynamic = "force-dynamic";
 
 import { StatsCards } from "@/components/stats-cards";
-import { DownloadCsvButton } from "@/components/download-csv-button";
+import { DashboardCharts } from "@/components/dashboard-charts";
+import { ExportActions } from "@/components/export-actions";
 import { SearchBar } from "@/components/search-bar";
 import { createServiceRoleClient } from "@/lib/supabase"; 
 import { UploadZone } from "@/components/upload-zone";
@@ -89,15 +90,21 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ q
            <Link href="/archive" className="px-4 py-2 text-sm font-medium text-slate-500 hover:text-slate-800 transition-colors">
              Arkiv
            </Link>
-           <DownloadCsvButton documents={documents || []} />
+           
+           {/* HÄR ÄR DEN NYA EXPORT-KOMPONENTEN */}
+           <ExportActions documents={documents || []} />
         </div>
       </div>
 
       <div className="max-w-5xl mx-auto px-6 pb-20">
         
+        {/* STATS CARDS */}
         <div className="mb-12">
             <StatsCards documents={documents || []} />
         </div>
+
+        {/* NYA GRAFERNA */}
+        <DashboardCharts documents={documents || []} />
 
         <div className="mb-16">
           <UploadZone />
