@@ -133,8 +133,18 @@ function extractJsonFromResponse(text: string) {
     return JSON.parse(clean);
   } catch (e) {
     console.error("JSON Error:", text);
-    // Returnera ett tomt "safe" objekt så vi inte kraschar
-    return { material: "Kunde inte tolka", weightKg: 0 }; 
+    // Returnera ett korrekt strukturerat fallback-objekt som matchar schemat
+    return {
+      material: { value: "Kunde inte tolka", confidence: 0 },
+      weightKg: { value: 0, confidence: 0 },
+      cost: { value: 0, confidence: 0 },
+      totalCo2Saved: { value: 0, confidence: 0 },
+      date: { value: new Date().toISOString().split("T")[0], confidence: 0 },
+      supplier: { value: "", confidence: 0 },
+      address: { value: "", confidence: 0 },
+      receiver: { value: "", confidence: 0 },
+      lineItems: []
+    };
   }
 }
 
@@ -258,21 +268,22 @@ async function processDocument(documentId: string) {
     const textContent = message.content[0].type === 'text' ? message.content[0].text : "";
     let rawData = extractJsonFromResponse(textContent);
 
-    // MERGE: Använd de säkra totalerna från koden
+    // MERGE: Använd de säkra totalerna från koden som FALLBACK
+    // OBS: Vi använder bara beräknade totaler när AI-extraction saknas eller är 0/null
+    // Vi jämför INTE magnitud - AI-extracted värden ska alltid prioriteras
     if (isBigFile) {
-        // Om AI:n missade totalen eller satte den till 0, använd vår uträkning
-        if (!rawData.weightKg?.value || rawData.weightKg.value < calculatedTotals.weight) {
+        // Vikt: Använd beräknad total endast om AI:n inte hittade något eller returnerade 0
+        if (!rawData.weightKg?.value || rawData.weightKg.value === 0) {
             rawData.weightKg = { value: calculatedTotals.weight, confidence: 1.0 };
         }
-        if (!rawData.cost?.value || rawData.cost.value < calculatedTotals.cost) {
+        // Kostnad: Använd beräknad total endast om AI:n inte hittade något eller returnerade 0
+        if (!rawData.cost?.value || rawData.cost.value === 0) {
             rawData.cost = { value: calculatedTotals.cost, confidence: 1.0 };
         }
+        // CO2: Använd beräknad total endast om AI:n inte hittade något
         if (!rawData.totalCo2Saved?.value && calculatedTotals.co2 > 0) {
             rawData.totalCo2Saved = { value: calculatedTotals.co2, confidence: 1.0 };
         }
-        
-        // Lägg till en "Fake" rad som säger att det finns fler rader, om vi vill vara tydliga
-        // Eller lita på att användaren ser "Total Vikt" och förstår.
     }
 
     const validatedData = WasteRecordSchema.parse({
@@ -292,13 +303,146 @@ async function processDocument(documentId: string) {
   }
 }
 
-// ... (reVerifyDocument bör också uppdateras med samma logik om du vill, men ovanstående räcker för uppladdningen) ...
+/**
+ * RE-VERIFY DOCUMENT (AI Dubbelkoll)
+ * Reruns AI extraction on an existing document
+ */
 export async function reVerifyDocument(documentId: string) {
-    // Du kan kopiera in samma "calculateBigDataTotals" logik här om du vill, 
-    // men för nu låter vi den vara som den var i förra steget, fast med JSON-fixen.
-    // (För enkelhetens skull i chatten utelämnar jag den koden här, använd den från förra steget + try/catch fixen).
-     const supabase = createServiceRoleClient();
-     // ... (kör standard AI prompt här) ...
+  const supabase = createServiceRoleClient();
+  const { data: doc } = await supabase.from("documents").select("*").eq("id", documentId).single();
+  if (!doc) throw new Error("Dokument hittades inte");
+
+  await supabase.from("documents").update({ status: "processing" }).eq("id", documentId);
+
+  try {
+    const { data: fileData, error: downloadError } = await supabase.storage
+      .from("raw_documents")
+      .download(doc.storage_path);
+
+    if (downloadError) throw new Error("Kunde inte ladda ner fil");
+    const arrayBuffer = await fileData.arrayBuffer();
+    
+    let claudeContent = [];
+    let calculatedTotals = { weight: 0, cost: 0, co2: 0, hazardousCount: 0 };
+    let isBigFile = false;
+
+    if (doc.filename.endsWith(".xlsx")) {
+      const workbook = XLSX.read(arrayBuffer);
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+
+      console.log("🧮 Räknar totaler via kod (re-verify)...");
+      calculatedTotals = calculateBigDataTotals(sheet);
+      console.log("✅ Kod-Totaler:", calculatedTotals);
+
+      const jsonPreview = XLSX.utils.sheet_to_json(sheet, { header: 1 }).slice(0, 25);
+      const csvPreview = jsonPreview.map(row => (row as any[]).join(",")).join("\n");
+      
+      isBigFile = true;
+
+      claudeContent.push({ 
+        type: "text", 
+        text: `Här är ett SMAKPROV (första 20 raderna) av en stor Excel-fil:\n${csvPreview}\n\n` + 
+              `MATEMATISKA TOTALER (Redan uträknat): ` + 
+              `Vikt=${calculatedTotals.weight}, Kostnad=${calculatedTotals.cost}.`
+      });
+
+    } else {
+      const base64Pdf = Buffer.from(arrayBuffer).toString("base64");
+      claudeContent.push({
+        type: "document",
+        source: { type: "base64", media_type: "application/pdf", data: base64Pdf },
+      });
+    }
+
+    const message = await anthropic.messages.create({
+      model: "claude-sonnet-4-5-20250929",
+      max_tokens: 4096,
+      messages: [
+        {
+          role: "user",
+          content: [
+            ...claudeContent as any,
+            {
+              type: "text",
+              text: `Du är en expert-AI för avfallsrapporter. Analysera dokumentet noggrant.
+
+              ANVÄND DESSA SYNONYMER FÖR ATT HITTA RÄTT KOLUMN:
+              - Material: "BEAst-artikel", "Fraktion", "Avfallsslag", "Artikel", "Taxekod", "Restprodukt".
+              - Adress: "Hämtadress", "Littera", "Arbetsplatsnamn", "Uppdragsställe", "Anläggningsadress".
+              - Vikt: "Vikt (kg)", "Mängd", "Kvantitet", "Antal kg", "Vikt körtur".
+              - Farligt Avfall: Leta efter texten "Farligt avfall", "FA" eller material som Asbest, Elektronik, Batterier, Kemikalier.
+              
+              INSTRUKTIONER:
+              1. Hitta Metadata (Leverantör, Datum, Adress).
+              2. Extrahera rader från SMAKPROVET. Returnera MAX 15 RADER i JSON. Försök inte returnera hela filen.
+              3. Farligt avfall: Sätt "isHazardous": true om det är elektronik, kemikalier, asbest etc.
+              4. Adress per rad: Om tabellen har kolumner som "Hämtställe", "Littera" eller "Projekt", extrahera dessa per rad.
+
+              JSON OUTPUT:
+              {
+                "date": { "value": "YYYY-MM-DD", "confidence": Number },
+                "supplier": { "value": "String", "confidence": Number },
+                "weightKg": { "value": Number, "confidence": Number },
+                "cost": { "value": Number, "confidence": Number },
+                "totalCo2Saved": { "value": Number, "confidence": Number },
+                "material": { "value": "String (Huvudkategori)", "confidence": Number },
+                "address": { "value": "String", "confidence": Number },
+                "receiver": { "value": "String", "confidence": Number },
+                "lineItems": [
+                  {
+                    "material": { "value": "String", "confidence": Number },
+                    "handling": { "value": "String", "confidence": Number },
+                    "weightKg": { "value": Number, "confidence": Number },
+                    "co2Saved": { "value": Number, "confidence": Number },
+                    "percentage": { "value": "String", "confidence": Number },
+                    "isHazardous": { "value": Boolean, "confidence": Number },
+                    "address": { "value": "String", "confidence": Number },
+                    "receiver": { "value": "String", "confidence": Number }
+                  }
+                ]
+              }
+              Returnera ENDAST ren JSON.`,
+            },
+          ],
+        },
+      ],
+    });
+
+    const textContent = message.content[0].type === 'text' ? message.content[0].text : "";
+    let rawData = extractJsonFromResponse(textContent);
+
+    // MERGE: Använd de säkra totalerna från koden som FALLBACK
+    if (isBigFile) {
+        if (!rawData.weightKg?.value || rawData.weightKg.value === 0) {
+            rawData.weightKg = { value: calculatedTotals.weight, confidence: 1.0 };
+        }
+        if (!rawData.cost?.value || rawData.cost.value === 0) {
+            rawData.cost = { value: calculatedTotals.cost, confidence: 1.0 };
+        }
+        if (!rawData.totalCo2Saved?.value && calculatedTotals.co2 > 0) {
+            rawData.totalCo2Saved = { value: calculatedTotals.co2, confidence: 1.0 };
+        }
+    }
+
+    const validatedData = WasteRecordSchema.parse({
+        ...rawData,
+        lineItems: rawData.lineItems || []
+    });
+
+    await supabase.from("documents").update({
+      status: "needs_review",
+      extracted_data: validatedData
+    }).eq("id", documentId);
+
+    revalidatePath(`/review/${documentId}`);
+    revalidatePath("/");
+
+  } catch (error: any) {
+    console.error("❌ Re-Verify Fail:", error);
+    await supabase.from("documents").update({ status: "error" }).eq("id", documentId);
+    throw error;
+  }
 }
 
 // ... (Behåll saveDocument, deleteDocument etc) ...
