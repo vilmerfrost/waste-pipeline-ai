@@ -15,16 +15,29 @@ export function ExportActions({ documents }: { documents: any[] }) {
   const prepareData = () => {
     let rows: any[] = [];
 
+    // Mappa namn till GUID (I en riktig app hämtas detta från settings-tabellen)
+    const GUID_MAP: Record<string, string> = {
+      "Returab": "550e8400-e29b-41d4-a716-446655440000",
+      "Svenska Servicestyrkan": "a1b2c3d4-e5f6-7890-1234-567890abcdef",
+      "Akademiska Hus AB": "201758-GUID-FIX", // Exempel från deras fil
+      "Sortera": ""
+    };
+
     documents.forEach((doc) => {
       const data = doc.extracted_data || {};
       const lineItems = data.lineItems || [];
+      const supplierName = getVal(data.supplier) || "";
+      
+      // HÄMTA RÄTT GUID
+      const customerGuid = GUID_MAP[supplierName] || "";
 
       // Gemensam data för hela dokumentet
       const baseData = {
         "Datum": getVal(data.date) || doc.created_at.split("T")[0],
+        "KundID-GUID": customerGuid, // <-- HÄR ÄR DEN NYA KOLUMNEN DE VILL HA
         "Adress": getVal(data.address) || "Okänd adress",
         "Mottagare": getVal(data.receiver) || "",
-        "Leverantör": getVal(data.supplier) || "",
+        "Leverantör": supplierName,
         "Filnamn": doc.filename
       };
 
@@ -69,6 +82,7 @@ export function ExportActions({ documents }: { documents: any[] }) {
     // Formatera kolumnbredd för snygghet
     const wscols = [
       { wch: 12 }, // Datum
+      { wch: 38 }, // KundID-GUID
       { wch: 30 }, // Adress
       { wch: 25 }, // Mottagare
       { wch: 20 }, // Leverantör
@@ -93,7 +107,7 @@ export function ExportActions({ documents }: { documents: any[] }) {
     const data = prepareData();
     
     // Anpassa för svensk CSV (semikolon eller komma, decimal-komma)
-    const headers = ["Datum", "Adress", "Material", "Vikt", "Enhet", "Mottagare"];
+    const headers = ["Datum", "KundID-GUID", "Adress", "Material", "Vikt", "Enhet", "Mottagare", "Leverantör"];
     
     const rows = data.map(row => {
         // Tvinga formatet: "1234,56" för vikt
@@ -103,11 +117,13 @@ export function ExportActions({ documents }: { documents: any[] }) {
 
         return [
             `"${row.Datum}"`,
+            `"${row["KundID-GUID"] || ""}"`,
             `"${row.Adress}"`,
             `"${row.Material}"`,
             `"${viktStr}"`, // Svenskt decimal-komma
             `"kg"`,
-            `"${row.Mottagare}"`
+            `"${row.Mottagare}"`,
+            `"${row.Leverantör}"`
         ].join(",");
     });
 

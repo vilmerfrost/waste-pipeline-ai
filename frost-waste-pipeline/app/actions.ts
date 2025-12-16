@@ -217,7 +217,7 @@ async function processDocument(documentId: string) {
         type: "document",
         source: { type: "base64", media_type: "application/pdf", data: base64Pdf },
       });
-    }
+  }
 
     const message = await anthropic.messages.create({
       model: "claude-sonnet-4-5-20250929",
@@ -514,7 +514,7 @@ export async function deleteDocument(formData: FormData) {
     await supabase.from("documents").delete().eq("id", id);
     revalidatePath("/");
     revalidatePath("/archive");
-}
+  }
 export async function toggleArchive(formData: FormData) {
     const supabase = createServiceRoleClient();
     const id = formData.get("id") as string;
@@ -531,7 +531,7 @@ export async function addMaterial(formData: FormData) {
     await supabase.from("materials").insert({ name: formattedName });
     revalidatePath("/settings");
     revalidatePath("/review/[id]", "page"); 
-}
+  }
 export async function deleteMaterial(formData: FormData) {
     const supabase = createServiceRoleClient();
     const id = formData.get("id") as string;
