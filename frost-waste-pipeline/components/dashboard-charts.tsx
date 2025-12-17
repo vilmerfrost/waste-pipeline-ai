@@ -58,8 +58,8 @@ export function DashboardCharts({ documents }: { documents: any[] }) {
       {/* BAR CHART */}
       <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
         <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-6">Topp Material (kg)</h3>
-        <div className="h-64 w-full">
-          <ResponsiveContainer width="100%" height="100%">
+        <div className="h-64 w-full min-w-0">
+          <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={256}>
             <BarChart data={barData}>
               <XAxis dataKey="name" fontSize={10} tickLine={false} axisLine={false} interval={0} />
               <Tooltip cursor={{fill: '#f1f5f9'}} contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} />
@@ -72,8 +72,8 @@ export function DashboardCharts({ documents }: { documents: any[] }) {
       {/* PIE CHART */}
       <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
         <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-6">Farligt vs Icke-Farligt</h3>
-        <div className="h-64 w-full flex items-center justify-center">
-            <ResponsiveContainer width="100%" height="100%">
+        <div className="h-64 w-full min-w-0 relative">
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={256}>
             <PieChart>
                 <Pie
                     data={pieData}
@@ -90,9 +90,11 @@ export function DashboardCharts({ documents }: { documents: any[] }) {
             </PieChart>
             </ResponsiveContainer>
             {/* Legend i mitten */}
-            <div className="absolute text-center pointer-events-none">
-                <p className="text-2xl font-bold text-slate-800">{Math.round((hazardousWeight / (hazardousWeight + nonHazardousWeight || 1)) * 100)}%</p>
-                <p className="text-xs text-slate-400">Farligt</p>
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div className="text-center">
+                    <p className="text-2xl font-bold text-slate-800">{Math.round((hazardousWeight / (hazardousWeight + nonHazardousWeight || 1)) * 100)}%</p>
+                    <p className="text-xs text-slate-400">Farligt</p>
+                </div>
             </div>
         </div>
       </div>

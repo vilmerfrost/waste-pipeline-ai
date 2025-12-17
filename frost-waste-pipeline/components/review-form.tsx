@@ -3,13 +3,16 @@
 import { useState, useEffect } from "react";
 import { SmartInput } from "@/components/smart-input";
 import { saveDocument } from "@/app/actions";
-import { ArrowRight, Save, Skull } from "lucide-react";
+import { ArrowRight, Save, Skull, ChevronDown, ChevronUp } from "lucide-react";
+
+const INITIAL_ROWS_TO_SHOW = 15; // Visa första 15 raderna som standard
 
 export function ReviewForm({ doc }: { doc: any }) {
   const initialData = doc.extracted_data || {};
   
   // State för rader så vi kan loopa och räkna
   const [lineItems, setLineItems] = useState(initialData.lineItems || []);
+  const [showAllRows, setShowAllRows] = useState(false);
   const [totals, setTotals] = useState({
     weight: initialData.weightKg?.value || 0,
     cost: initialData.cost?.value || 0,
@@ -45,6 +48,12 @@ export function ReviewForm({ doc }: { doc: any }) {
 
   const hasLineAddress = lineItems.some((item: any) => item.address?.value && item.address.value.length > 1);
   const hasHandling = lineItems.some((item: any) => item.handling?.value);
+  const hasLineDate = lineItems.some((item: any) => item.date?.value);
+
+  // Beräkna om vi ska visa alla rader eller bara första X
+  const rowsToShow = showAllRows ? lineItems.length : Math.min(INITIAL_ROWS_TO_SHOW, lineItems.length);
+  const hasMoreRows = lineItems.length > INITIAL_ROWS_TO_SHOW;
+  const hiddenRowsCount = hasMoreRows ? lineItems.length - INITIAL_ROWS_TO_SHOW : 0;
 
   return (
     <form action={saveDocument} className="space-y-8">
@@ -61,23 +70,44 @@ export function ReviewForm({ doc }: { doc: any }) {
 
       {/* DYNAMISK TABELL */}
       <section className="space-y-6 pt-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-4 border-b border-slate-50 pb-2">Specifikation</h3>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 border-b border-slate-50 pb-2 flex-1">Specifikation</h3>
+          {hasMoreRows && (
+            <span className="text-xs text-slate-400 ml-4">
+              {showAllRows ? `${lineItems.length} rader` : `Visar ${rowsToShow} av ${lineItems.length} rader`}
+            </span>
+          )}
+        </div>
         
         <div className="bg-slate-50 rounded-xl border border-slate-200 overflow-hidden mb-6">
           <table className="w-full text-sm text-left">
             <thead className="bg-slate-100 text-slate-500 font-medium">
               <tr>
+                {hasLineDate && <th className="p-3 pl-4">Datum</th>}
                 <th className="p-3 pl-4">Material</th>
-                {hasLineAddress && <th className="p-3">Hämtställe</th>}
+                {hasLineAddress && <th className="p-3">Adress</th>}
                 {hasHandling && <th className="p-3">Hantering</th>}
                 <th className="p-3 text-right">Vikt (kg)</th>
                 <th className="p-3 text-right text-green-600">CO2</th>
+                <th className="p-3">Mottagare</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 bg-white">
               {lineItems.length > 0 ? (
-                lineItems.map((item: any, index: number) => (
-                  <tr key={index}>
+                lineItems.map((item: any, index: number) => {
+                  const isHidden = !showAllRows && index >= INITIAL_ROWS_TO_SHOW;
+                  return (
+                  <tr key={index} className={isHidden ? "hidden" : ""}>
+                    {hasLineDate && (
+                      <td className="p-2">
+                        <SmartInput 
+                          label="" name={`lineItems[${index}].date`} type="date" 
+                          fieldData={item.date} 
+                          onChange={(e) => updateLineItem(index, 'date', e.target.value)}
+                          className="border-0 shadow-none focus:ring-0 p-1 text-xs font-mono" 
+                        />
+                      </td>
+                    )}
                     <td className="p-2">
                        <div className="flex items-center gap-2">
                             {/* Klickbar Skalle för Farligt Avfall */}
@@ -128,13 +158,45 @@ export function ReviewForm({ doc }: { doc: any }) {
                             className="border-0 shadow-none focus:ring-0 p-1 text-right font-mono text-green-600" 
                         />
                     </td>
+                    <td className="p-2">
+                        <SmartInput 
+                            label="" name={`lineItems[${index}].receiver`} type="text" 
+                            fieldData={item.receiver} 
+                            onChange={(e) => updateLineItem(index, 'receiver', e.target.value)}
+                            className="border-0 shadow-none focus:ring-0 p-1 text-xs" 
+                        />
+                    </td>
                   </tr>
-                ))
+                  );
+                })
               ) : (
                 <tr><td colSpan={5} className="p-8 text-center text-slate-400">Inga rader.</td></tr>
               )}
             </tbody>
           </table>
+
+          {/* VISA MER/MINDRE KNAPP */}
+          {hasMoreRows && (
+            <div className="bg-slate-50 border-t border-slate-200 px-4 py-3 flex justify-center">
+              <button
+                type="button"
+                onClick={() => setShowAllRows(!showAllRows)}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900 hover:bg-white rounded-lg transition-colors border border-slate-200"
+              >
+                {showAllRows ? (
+                  <>
+                    <ChevronUp className="w-4 h-4" />
+                    Visa mindre ({INITIAL_ROWS_TO_SHOW} rader)
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="w-4 h-4" />
+                    Visa mer ({hiddenRowsCount} fler rader)
+                  </>
+                )}
+              </button>
+            </div>
+          )}
 
           {/* TOTALER - UPPDATERAS LIVE */}
           <div className="bg-slate-100 p-3 flex justify-between items-center border-t border-slate-200">

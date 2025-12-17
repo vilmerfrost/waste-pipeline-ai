@@ -16,8 +16,22 @@ export function StatsCards({ documents }: { documents: any[] }) {
   }, 0);
 
   const formatWeight = (kg: number) => {
-    if (kg >= 1000) return `${(kg / 1000).toFixed(1).replace(".", ",")} ton`;
-    return `${Math.round(kg)} kg`;
+    if (kg >= 1_000_000) {
+      // För mycket stora tal: visa i miljoner ton med tusentalsavgränsare
+      const millions = kg / 1_000_000;
+      return `${millions.toFixed(1).replace(".", ",")} milj ton`;
+    } else if (kg >= 1000) {
+      // För ton: visa med tusentalsavgränsare
+      const tons = kg / 1000;
+      // Använd svensk formatering med mellanslag som tusentalsavgränsare
+      const formatted = tons.toFixed(1).replace(".", ",");
+      // Lägg till mellanslag som tusentalsavgränsare
+      const parts = formatted.split(",");
+      const wholePart = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+      return `${wholePart}${parts[1] ? `,${parts[1]}` : ""} ton`;
+    }
+    // För kg: visa med tusentalsavgränsare
+    return `${Math.round(kg).toLocaleString("sv-SE")} kg`;
   };
 
   const formatMoney = (sek: number) => {

@@ -5,6 +5,13 @@ import { FileActions } from "@/components/file-actions";
 
 export const dynamic = "force-dynamic";
 
+// HJÄLPFUNKTION: Hanterar både gamla (strängar) och nya (objekt) format
+const getValue = (field: any) => {
+  if (!field) return null;
+  if (typeof field === "object" && "value" in field) return field.value;
+  return field;
+};
+
 export default async function ArchivePage() {
   const supabase = createServiceRoleClient();
 
@@ -46,7 +53,7 @@ export default async function ArchivePage() {
                       {doc.filename}
                     </td>
                     <td className="px-6 py-4">
-                      {doc.extracted_data?.date || new Date(doc.created_at).toLocaleDateString("sv-SE")}
+                      {getValue(doc.extracted_data?.date) || new Date(doc.created_at).toLocaleDateString("sv-SE")}
                     </td>
                     <td className="px-6 py-4">
                         {/* Här återanvänder vi våra knappar, men säger att vi är på arkivsidan */}

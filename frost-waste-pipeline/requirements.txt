@@ -1,0 +1,19 @@
+# Core dependencies
+azure-storage-blob==12.19.0
+anthropic==0.18.1
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic==2.5.3
+python-dotenv==1.0.0
+
+# File processing
+PyPDF2==3.0.1
+pdfplumber==0.10.3
+openpyxl==3.1.2
+pandas==2.1.4
+
+# Utils
+requests==2.31.0
+python-multipart==0.0.6
+aiofiles==23.2.1
+watchdog==3.0.0

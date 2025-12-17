@@ -1,9 +1,13 @@
 "use client";
 
-import { Download, FileSpreadsheet } from "lucide-react";
+import { Download, FileSpreadsheet, Archive, CheckCircle2, Loader2 } from "lucide-react";
 import * as XLSX from "xlsx";
+import { archiveAllDocuments, verifyAllDocuments } from "@/app/actions";
+import { useState } from "react";
 
 export function ExportActions({ documents }: { documents: any[] }) {
+  const [isArchiving, setIsArchiving] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
   
   const getVal = (field: any) => {
     if (!field) return "";
@@ -15,12 +19,12 @@ export function ExportActions({ documents }: { documents: any[] }) {
   const prepareData = () => {
     let rows: any[] = [];
 
-    // Mappa namn till GUID (I en riktig app hämtas detta från settings-tabellen)
-    const GUID_MAP: Record<string, string> = {
+    // DEMO GUID-mappning (I en riktig app hämtas detta från settings-tabellen)
+    const DEMO_GUID_MAP: Record<string, string> = {
       "Returab": "550e8400-e29b-41d4-a716-446655440000",
       "Svenska Servicestyrkan": "a1b2c3d4-e5f6-7890-1234-567890abcdef",
-      "Akademiska Hus AB": "201758-GUID-FIX", // Exempel från deras fil
-      "Sortera": ""
+      "Sortera": "SORTERA-GUID-123",
+      "Akademiska Hus AB": "201758-SYSAV-GUID"
     };
 
     documents.forEach((doc) => {
@@ -28,44 +32,66 @@ export function ExportActions({ documents }: { documents: any[] }) {
       const lineItems = data.lineItems || [];
       const supplierName = getVal(data.supplier) || "";
       
-      // HÄMTA RÄTT GUID
-      const customerGuid = GUID_MAP[supplierName] || "";
+      // HÄMTA RÄTT GUID (prioritera settings, men ha demo-fallback)
+      const customerGuid = DEMO_GUID_MAP[supplierName] || "";
+
+      // ADRESS-LOGIK: Rad > Huvud > Tom (Aldrig "Okänd")
+      const mainAddress = getVal(data.address);
+      const cleanMainAddress = mainAddress && mainAddress !== "Okänd adress" && mainAddress.trim() !== "" 
+        ? mainAddress.trim() 
+        : "";
 
       // Gemensam data för hela dokumentet
       const baseData = {
         "Datum": getVal(data.date) || doc.created_at.split("T")[0],
-        "KundID-GUID": customerGuid, // <-- HÄR ÄR DEN NYA KOLUMNEN DE VILL HA
-        "Adress": getVal(data.address) || "Okänd adress",
+        "KundID-GUID": customerGuid,
+        "Adress": cleanMainAddress, // Använd renad adress
         "Mottagare": getVal(data.receiver) || "",
         "Leverantör": supplierName,
         "Filnamn": doc.filename
       };
 
+      // Hjälpfunktion för att formatera vikt: två decimaler, kommatecken, inga tusenavgränsare
+      const formatWeight = (weight: number): string => {
+        return weight.toFixed(2).replace(".", ",");
+      };
+
       if (lineItems.length > 0) {
         // SCENARIO 1: Vi har detaljerade rader (Line Items)
-        // Skapa en rad i Excel för VARJE rad i dokumentet
         lineItems.forEach((item: any) => {
+          // ✅ DATUM PER RAD: Använd datum från lineItem om det finns, annars dokumentets datum
+          const rowDate = getVal(item.date) || getVal(data.date) || doc.created_at.split("T")[0];
+          
+          // Försök hitta rad-adress, annars ta huvudadress
+          let rowAddr = getVal(item.address);
+          if (!rowAddr || rowAddr === "Okänd adress" || rowAddr.trim() === "") {
+            rowAddr = cleanMainAddress; // Fallback till huvudadress
+          } else {
+            rowAddr = rowAddr.trim();
+          }
+
+          // ✅ MOTTAGARE PER RAD: Använd från lineItem om det finns, annars från dokumentet
+          const rowReceiver = getVal(item.receiver) || getVal(data.receiver) || "";
+
           rows.push({
-            ...baseData, // Kopiera datum, adress etc.
-            "Material": getVal(item.material) || "Okänt",
-            "Vikt": getVal(item.weightKg) || 0, // Nummer för Excel
-            "Enhet": "kg",
-            "Kostnad": 0, // Ofta saknas kostnad på radnivå, men kan läggas till
-            "Farligt Avfall": getVal(item.isHazardous) ? "Ja" : "Nej",
-            "Hantering": getVal(item.handling) || ""
+            "Datum": rowDate, // ✅ ÅÅÅÅ-MM-DD format
+            "Adress": rowAddr || "", // ✅ Hämtställe
+            "Material": getVal(item.material) || "Okänt", // ✅ Standardiserad benämning
+            "Vikt": formatWeight(Number(getVal(item.weightKg)) || 0), // ✅ Två decimaler, kommatecken
+            "Enhet": "Kg", // ✅ Alltid "Kg" (stor K)
+            "Mottagare": rowReceiver || "" // ✅ Mottagare per rad
           });
         });
       } else {
         // SCENARIO 2: Inga rader (gammal fil eller enkel faktura)
-        // Använd totalerna
+        const docDate = getVal(data.date) || doc.created_at.split("T")[0];
         rows.push({
-          ...baseData,
-          "Material": getVal(data.material) || "Blandat",
-          "Vikt": getVal(data.weightKg) || 0,
-          "Enhet": "kg",
-          "Kostnad": getVal(data.cost) || 0,
-          "Farligt Avfall": "Nej",
-          "Hantering": ""
+          "Datum": docDate, // ✅ ÅÅÅÅ-MM-DD format
+          "Adress": cleanMainAddress || "", // ✅ Hämtställe
+          "Material": getVal(data.material) || "Blandat", // ✅ Standardiserad benämning
+          "Vikt": formatWeight(Number(getVal(data.weightKg)) || 0), // ✅ Två decimaler, kommatecken
+          "Enhet": "Kg", // ✅ Alltid "Kg" (stor K)
+          "Mottagare": getVal(data.receiver) || "" // ✅ Mottagare
         });
       }
     });
@@ -79,25 +105,38 @@ export function ExportActions({ documents }: { documents: any[] }) {
 
     const data = prepareData();
     
-    // Formatera kolumnbredd för snygghet
-    const wscols = [
+    // Skapa worksheet
+    const ws = XLSX.utils.json_to_sheet(data);
+    
+    // SÄTT KOLUMNBREDDER (Så det ser proffsigt ut direkt vid öppning)
+    // Ordningen: Datum, Adress, Material, Vikt, Enhet, Mottagare
+    ws['!cols'] = [
       { wch: 12 }, // Datum
-      { wch: 38 }, // KundID-GUID
-      { wch: 30 }, // Adress
-      { wch: 25 }, // Mottagare
-      { wch: 20 }, // Leverantör
-      { wch: 20 }, // Filnamn
+      { wch: 35 }, // Adress
       { wch: 30 }, // Material
-      { wch: 10 }, // Vikt
-      { wch: 5 },  // Enhet
+      { wch: 12 }, // Vikt (formaterad som text med kommatecken)
+      { wch: 8 },  // Enhet
+      { wch: 25 }  // Mottagare
     ];
 
-    const ws = XLSX.utils.json_to_sheet(data);
-    ws['!cols'] = wscols;
+    // Formatera rubrikraden (fetstil)
+    const headerRange = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+    for (let col = headerRange.s.c; col <= headerRange.e.c; col++) {
+      const cellAddress = XLSX.utils.encode_cell({ r: 0, c: col });
+      if (!ws[cellAddress]) continue;
+      ws[cellAddress].s = {
+        font: { bold: true },
+        fill: { fgColor: { rgb: "E8E8E8" } },
+        alignment: { horizontal: "left", vertical: "center" }
+      };
+    }
 
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Avfallsdata");
-    XLSX.writeFile(wb, `FROST-Export-${new Date().toISOString().split("T")[0]}.xlsx`);
+    
+    // Filnamn med datum
+    const filename = `FROST-Export-${new Date().toISOString().split("T")[0]}.xlsx`;
+    XLSX.writeFile(wb, filename);
   };
 
   // --- EXPORT: CSV (Formatterad enligt krav) ---
@@ -106,40 +145,107 @@ export function ExportActions({ documents }: { documents: any[] }) {
     
     const data = prepareData();
     
-    // Anpassa för svensk CSV (semikolon eller komma, decimal-komma)
-    const headers = ["Datum", "KundID-GUID", "Adress", "Material", "Vikt", "Enhet", "Mottagare", "Leverantör"];
+    // Hjälpfunktion för att rensa och escapea CSV-värden
+    const cleanCsvValue = (val: any): string => {
+      if (val == null || val === "") return "";
+      const str = String(val);
+      // Escape citattecken och wrappa i citattecken om det finns kommatecken eller citattecken
+      if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+    
+    // ✅ Kolumner enligt kundens specifikation: Datum, Adress, Material, Vikt, Enhet, Mottagare
+    const headers = [
+      "Datum", 
+      "Adress", 
+      "Material", 
+      "Vikt", 
+      "Enhet", 
+      "Mottagare"
+    ];
     
     const rows = data.map(row => {
-        // Tvinga formatet: "1234,56" för vikt
-        const viktStr = typeof row.Vikt === 'number' 
-            ? row.Vikt.toFixed(2).replace('.', ',') 
-            : "0,00";
+        // Vikt är redan formaterad som sträng med kommatecken från prepareData
+        const viktStr = typeof row.Vikt === 'string' 
+            ? row.Vikt 
+            : (typeof row.Vikt === 'number' ? row.Vikt.toFixed(2).replace('.', ',') : "0,00");
 
         return [
-            `"${row.Datum}"`,
-            `"${row["KundID-GUID"] || ""}"`,
-            `"${row.Adress}"`,
-            `"${row.Material}"`,
-            `"${viktStr}"`, // Svenskt decimal-komma
-            `"kg"`,
-            `"${row.Mottagare}"`,
-            `"${row.Leverantör}"`
+            cleanCsvValue(row.Datum || ""),
+            cleanCsvValue(row.Adress || ""), // ✅ Hämtställe
+            cleanCsvValue(row.Material || ""), // ✅ Standardiserad benämning
+            viktStr, // ✅ Två decimaler, kommatecken, inga tusenavgränsare
+            "Kg", // ✅ Alltid "Kg" (stor K)
+            cleanCsvValue(row.Mottagare || "") // ✅ Mottagare
         ].join(",");
     });
 
+    // BOM för UTF-8 (så Excel öppnar det korrekt)
     const csvContent = "\uFEFF" + headers.join(",") + "\n" + rows.join("\n");
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.setAttribute("download", `avfallshantering.csv`); // Samma namn som exemplet
+    link.setAttribute("download", `avfallshantering-${new Date().toISOString().split("T")[0]}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
+  // --- ARKIVERA ALLA DOKUMENT ---
+  const handleArchiveAll = async () => {
+    if (documents.length === 0) return;
+    
+    // Säkerhetsfråga så man inte råkar klicka
+    if (!confirm(`Är du säker på att du vill arkivera alla ${documents.length} dokument i listan?`)) return;
+
+    setIsArchiving(true);
+    try {
+      await archiveAllDocuments();
+    } catch (e) {
+      alert("Något gick fel vid arkivering.");
+    } finally {
+      setIsArchiving(false);
+    }
+  };
+
+  // --- GODKÄNN ALLA DOKUMENT ---
+  const handleVerifyAll = async () => {
+    const needsReview = documents.filter(d => d.status === "needs_review" || d.status === "processing" || d.status === "uploaded" || d.status === "queued");
+    if (needsReview.length === 0) {
+      alert("Inga dokument behöver godkännas.");
+      return;
+    }
+    
+    // Dubbel säkerhetsvarning
+    if (!confirm(`Är du säker på att du vill godkänna alla ${needsReview.length} dokument?\n\nDubbelkolla alltid!`)) return;
+    
+    // Ytterligare bekräftelse
+    if (!confirm(`Sista varningen: Du är på väg att godkänna ${needsReview.length} dokument utan granskning. Fortsätt?`)) return;
+
+    setIsVerifying(true);
+    try {
+      await verifyAllDocuments();
+    } catch (e) {
+      alert("Något gick fel vid godkännande.");
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  const needsReviewCount = documents.filter(d => 
+    d.status === "needs_review" || 
+    d.status === "processing" || 
+    d.status === "uploaded" || 
+    d.status === "queued"
+  ).length;
+
   return (
-    <div className="flex gap-2">
+    <div className="flex gap-2 items-center">
+      {/* EXPORT KNAPPAR */}
       <button 
         onClick={handleExportExcel}
         className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white border border-green-700 rounded-lg text-sm font-bold hover:bg-green-500 transition-colors shadow-sm active:scale-95"
@@ -154,6 +260,44 @@ export function ExportActions({ documents }: { documents: any[] }) {
       >
         <Download className="w-4 h-4" />
         CSV
+      </button>
+      
+      {/* AVSKILJARE */}
+      <div className="w-px h-6 bg-slate-300 mx-1"></div>
+
+      {/* GODKÄNN ALLA KNAPP */}
+      <button 
+        onClick={handleVerifyAll}
+        disabled={isVerifying || needsReviewCount === 0}
+        className="flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-blue-700 text-sm font-medium hover:bg-blue-100 hover:border-blue-300 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+        title={`Godkänn alla ${needsReviewCount} dokument som väntar på granskning`}
+      >
+        {isVerifying ? (
+          <Loader2 className="w-4 h-4 animate-spin" />
+        ) : (
+          <CheckCircle2 className="w-4 h-4" />
+        )}
+        Godkänn alla
+        {needsReviewCount > 0 && (
+          <span className="px-1.5 py-0.5 bg-blue-200 rounded text-xs font-bold">
+            {needsReviewCount}
+          </span>
+        )}
+      </button>
+
+      {/* ARKIVERA ALLT KNAPP */}
+      <button 
+        onClick={handleArchiveAll}
+        disabled={isArchiving || documents.length === 0}
+        className="flex items-center gap-2 px-3 py-2 bg-slate-100 border border-slate-200 rounded-lg text-slate-500 text-sm font-medium hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+        title="Flytta alla dokument i listan till arkivet"
+      >
+        {isArchiving ? (
+          <Loader2 className="w-4 h-4 animate-spin" />
+        ) : (
+          <Archive className="w-4 h-4" />
+        )}
+        Arkivera allt
       </button>
     </div>
   );

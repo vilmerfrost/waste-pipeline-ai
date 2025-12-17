@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
-import { Trash2, Archive, Download, RefreshCcw, FileJson, Code, X, Copy, Check } from "lucide-react";
-import { deleteDocument, toggleArchive } from "@/app/actions";
+import { useState, useEffect } from "react";
+import { Trash2, Archive, Download, RefreshCcw, FileJson, Code, X, Copy, Check, RotateCcw, Loader2, FileSpreadsheet } from "lucide-react";
+import { deleteDocument, toggleArchive, retryProcessing } from "@/app/actions";
+import { useRouter } from "next/navigation";
+import * as XLSX from "xlsx";
 
 // --- NY SMART CSV-GENERATOR (Samma logik som ExportActions) ---
 function downloadSingleCsv(doc: any) {
@@ -17,77 +19,73 @@ function downloadSingleCsv(doc: any) {
 
   const clean = (val: any) => `"${String(val || "").replace(/"/g, '""')}"`;
 
-  // Utökade rubriker för att matcha detaljnivån
+  // ✅ Kolumner enligt kundens specifikation: Datum, Adress, Material, Vikt, Enhet, Mottagare
   const headers = [
     "Datum", 
-    "Filnamn", 
-    "Leverantör", 
-    "Material", 
-    "Vikt (kg)", 
-    "Enhet",
-    "Kostnad (kr)", 
     "Adress", 
-    "Mottagare", 
-    "Hantering",
-    "Farligt Avfall",
-    "CO2 Besparing",
-    "Status"
+    "Material", 
+    "Vikt", 
+    "Enhet", 
+    "Mottagare"
   ];
   
   let rows: string[] = [];
 
-  // Gemensam data
-  const baseData = [
-    getVal(data.date) || doc.created_at.split("T")[0],
-    doc.filename,
-    getVal(data.supplier) || ""
-  ];
+  // ADRESS-LOGIK: Rad > Huvud > Tom (Aldrig "Okänd")
+  const mainAddress = getVal(data.address);
+  const cleanMainAddress = mainAddress && mainAddress !== "Okänd adress" && mainAddress.trim() !== "" 
+    ? mainAddress.trim() 
+    : "";
+
+  // Hjälpfunktion för att formatera vikt: två decimaler, kommatecken, inga tusenavgränsare
+  const formatWeight = (weight: number): string => {
+    return weight.toFixed(2).replace(".", ",");
+  };
 
   if (lineItems.length > 0) {
     // SCENARIO 1: Detaljerade rader
     lineItems.forEach((item: any) => {
-        // Tvinga formatet: "1234,56" för vikt (Svensk standard)
-        const weightVal = getVal(item.weightKg);
-        const weightStr = typeof weightVal === 'number' ? weightVal.toFixed(2).replace('.', ',') : "0,00";
+        // ✅ DATUM PER RAD: Använd datum från lineItem om det finns, annars dokumentets datum
+        const rowDate = getVal(item.date) || getVal(data.date) || doc.created_at.split("T")[0];
         
-        const costVal = getVal(data.cost); // Kostnad ligger oftast på totalen, inte raden
-        const costStr = typeof costVal === 'number' ? costVal.toFixed(2).replace('.', ',') : "0,00";
+        // Tvinga formatet: "1234,56" för vikt (Svensk standard)
+        const weightVal = Number(getVal(item.weightKg)) || 0;
+        const weightStr = formatWeight(weightVal);
+
+        // Försök hitta rad-adress, annars ta huvudadress
+        let rowAddr = getVal(item.address);
+        if (!rowAddr || rowAddr === "Okänd adress" || rowAddr.trim() === "") {
+          rowAddr = cleanMainAddress; // Fallback till huvudadress
+        } else {
+          rowAddr = rowAddr.trim();
+        }
+
+        // ✅ MOTTAGARE PER RAD
+        const rowReceiver = getVal(item.receiver) || getVal(data.receiver) || "";
 
         const row = [
-            ...baseData,
-            getVal(item.material) || "Okänt",
-            weightStr,
-            "kg",
-            costStr, // Vi upprepar totalkostnaden eller sätter 0 om vi vill vara strikta
-            getVal(item.address) || getVal(data.address) || "", // Rad-adress eller Huvudadress
-            getVal(item.receiver) || getVal(data.receiver) || "",
-            getVal(item.handling) || "",
-            getVal(item.isHazardous) ? "Ja" : "Nej",
-            getVal(item.co2Saved) || 0,
-            doc.status
+            rowDate, // ✅ ÅÅÅÅ-MM-DD format
+            rowAddr || "", // ✅ Hämtställe
+            getVal(item.material) || "Okänt", // ✅ Standardiserad benämning
+            weightStr, // ✅ Två decimaler, kommatecken
+            "Kg", // ✅ Alltid "Kg" (stor K)
+            rowReceiver || "" // ✅ Mottagare
         ];
         rows.push(row.map(clean).join(","));
     });
   } else {
     // SCENARIO 2: Enkel faktura (inga rader)
-    const weightVal = getVal(data.weightKg);
-    const weightStr = typeof weightVal === 'number' ? weightVal.toFixed(2).replace('.', ',') : "0,00";
-    
-    const costVal = getVal(data.cost);
-    const costStr = typeof costVal === 'number' ? costVal.toFixed(2).replace('.', ',') : "0,00";
+    const docDate = getVal(data.date) || doc.created_at.split("T")[0];
+    const weightVal = Number(getVal(data.weightKg)) || 0;
+    const weightStr = formatWeight(weightVal);
 
     const row = [
-        ...baseData,
-        getVal(data.material) || "Blandat",
-        weightStr,
-        "kg",
-        costStr,
-        getVal(data.address) || "",
-        getVal(data.receiver) || "",
-        "", // Hantering
-        "Nej", // Farligt
-        getVal(data.totalCo2Saved) || 0,
-        doc.status
+        docDate, // ✅ ÅÅÅÅ-MM-DD format
+        cleanMainAddress || "", // ✅ Hämtställe
+        getVal(data.material) || "Blandat", // ✅ Standardiserad benämning
+        weightStr, // ✅ Två decimaler, kommatecken
+        "Kg", // ✅ Alltid "Kg" (stor K)
+        getVal(data.receiver) || "" // ✅ Mottagare
     ];
     rows.push(row.map(clean).join(","));
   }
@@ -101,6 +99,90 @@ function downloadSingleCsv(doc: any) {
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+// --- EXCEL-GENERATOR FÖR INDIVIDUELL FIL ---
+function downloadSingleExcel(doc: any) {
+  const data = doc.extracted_data || {};
+  const lineItems = data.lineItems || [];
+  
+  const getVal = (field: any) => {
+    if (!field) return "";
+    if (typeof field === "object" && "value" in field) return field.value;
+    return field;
+  };
+
+  // ADRESS-LOGIK: Rad > Huvud > Tom (Aldrig "Okänd")
+  const mainAddress = getVal(data.address);
+  const cleanMainAddress = mainAddress && mainAddress !== "Okänd adress" && mainAddress.trim() !== "" 
+    ? mainAddress.trim() 
+    : "";
+
+  let rows: any[] = [];
+
+  // Hjälpfunktion för att formatera vikt: två decimaler, kommatecken, inga tusenavgränsare
+  const formatWeight = (weight: number): string => {
+    return weight.toFixed(2).replace(".", ",");
+  };
+
+  if (lineItems.length > 0) {
+    // SCENARIO 1: Detaljerade rader
+    lineItems.forEach((item: any) => {
+      // ✅ DATUM PER RAD: Använd datum från lineItem om det finns, annars dokumentets datum
+      const rowDate = getVal(item.date) || getVal(data.date) || doc.created_at.split("T")[0];
+      
+      // Försök hitta rad-adress, annars ta huvudadress
+      let rowAddr = getVal(item.address);
+      if (!rowAddr || rowAddr === "Okänd adress" || rowAddr.trim() === "") {
+        rowAddr = cleanMainAddress;
+      } else {
+        rowAddr = rowAddr.trim();
+      }
+
+      // ✅ MOTTAGARE PER RAD
+      const rowReceiver = getVal(item.receiver) || getVal(data.receiver) || "";
+
+      rows.push({
+        "Datum": rowDate, // ✅ ÅÅÅÅ-MM-DD format
+        "Adress": rowAddr || "", // ✅ Hämtställe
+        "Material": getVal(item.material) || "Okänt", // ✅ Standardiserad benämning
+        "Vikt": formatWeight(Number(getVal(item.weightKg)) || 0), // ✅ Två decimaler, kommatecken
+        "Enhet": "Kg", // ✅ Alltid "Kg" (stor K)
+        "Mottagare": rowReceiver || "" // ✅ Mottagare per rad
+      });
+    });
+  } else {
+    // SCENARIO 2: Enkel faktura (inga rader)
+    const docDate = getVal(data.date) || doc.created_at.split("T")[0];
+    rows.push({
+      "Datum": docDate, // ✅ ÅÅÅÅ-MM-DD format
+      "Adress": cleanMainAddress || "", // ✅ Hämtställe
+      "Material": getVal(data.material) || "Blandat", // ✅ Standardiserad benämning
+      "Vikt": formatWeight(Number(getVal(data.weightKg)) || 0), // ✅ Två decimaler, kommatecken
+      "Enhet": "Kg", // ✅ Alltid "Kg" (stor K)
+      "Mottagare": getVal(data.receiver) || "" // ✅ Mottagare
+    });
+  }
+
+  // Skapa Excel-fil
+  const ws = XLSX.utils.json_to_sheet(rows);
+  
+  // ✅ Sätt kolumnbredder: Datum, Adress, Material, Vikt, Enhet, Mottagare
+  ws['!cols'] = [
+    { wch: 12 }, // Datum
+    { wch: 35 }, // Adress
+    { wch: 30 }, // Material
+    { wch: 12 }, // Vikt (formaterad som text med kommatecken)
+    { wch: 8 },  // Enhet
+    { wch: 25 }  // Mottagare
+  ];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Avfallsdata");
+  
+  const filename = `${doc.filename.replace(/\.[^/.]+$/, "")}_export.xlsx`;
+  XLSX.writeFile(wb, filename);
 }
 
 // ... (Resten av filen är samma som förut: getCleanJson, downloadSingleJson, FileActions komponent) ...
@@ -130,7 +212,15 @@ function downloadSingleJson(doc: any) {
 export function FileActions({ doc, isArchivedPage = false }: { doc: any, isArchivedPage?: boolean }) {
   const [showJson, setShowJson] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const router = useRouter();
   const cleanDoc = getCleanJson(doc);
+
+  // Fix hydration mismatch
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(JSON.stringify(cleanDoc, null, 2));
@@ -138,9 +228,52 @@ export function FileActions({ doc, isArchivedPage = false }: { doc: any, isArchi
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const handleRetry = async () => {
+    setIsRetrying(true);
+    try {
+      await retryProcessing(doc.id);
+      router.refresh(); // Uppdatera sidan för att visa ny status
+    } catch (error: any) {
+      alert(`Kunde inte försöka igen: ${error.message || "Okänt fel"}`);
+    } finally {
+      setIsRetrying(false);
+    }
+  };
+
+  // Prevent hydration mismatch by ensuring consistent initial render
+  if (!mounted) {
+    return (
+      <div className="flex items-center justify-end gap-1">
+        {doc.status === "error" && <div className="w-6 h-6" />}
+        <div className="w-6 h-6" />
+        <div className="w-6 h-6" />
+        <div className="w-6 h-6" />
+        <div className="w-6 h-6" />
+        <div className="w-6 h-6" />
+        <div className="w-6 h-6" />
+      </div>
+    );
+  }
+
   return (
     <>
       <div className="flex items-center justify-end gap-1">
+        {/* RETRY KNAPP - Visas bara för filer med error-status */}
+        {doc.status === "error" && (
+          <button
+            onClick={handleRetry}
+            disabled={isRetrying}
+            title="Försök bearbeta filen igen"
+            className="p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isRetrying ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <RotateCcw className="w-4 h-4" />
+            )}
+          </button>
+        )}
+
         <button
           onClick={() => setShowJson(true)}
           title="Visa API Response"
@@ -155,6 +288,14 @@ export function FileActions({ doc, isArchivedPage = false }: { doc: any, isArchi
           className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors"
         >
           <FileJson className="w-4 h-4" />
+        </button>
+
+        <button
+          onClick={() => downloadSingleExcel(doc)}
+          title="Ladda ner Excel"
+          className="p-1.5 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded-md transition-colors"
+        >
+          <FileSpreadsheet className="w-4 h-4" />
         </button>
 
         <button

@@ -7,10 +7,11 @@ import { ExportActions } from "@/components/export-actions";
 import { SearchBar } from "@/components/search-bar";
 import { createServiceRoleClient } from "@/lib/supabase"; 
 import { UploadZone } from "@/components/upload-zone";
-import { FileText, ArrowRight, Archive as ArchiveIcon } from "lucide-react";
+import { FileText, ArrowRight, Archive as ArchiveIcon, RotateCcw } from "lucide-react";
 import { revalidatePath } from "next/cache";
 import Link from "next/link"; 
 import { FileActions } from "@/components/file-actions";
+import { RetryButton } from "@/components/retry-button";
 
 const MOCK_USER = {
   id: "00000000-0000-0000-0000-000000000000",
@@ -90,6 +91,10 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ q
            <Link href="/archive" className="px-4 py-2 text-sm font-medium text-slate-500 hover:text-slate-800 transition-colors">
              Arkiv
            </Link>
+           <span className="text-slate-300">|</span>
+           <Link href="/collecct" className="px-4 py-2 text-sm font-medium text-indigo-600 hover:text-indigo-700 transition-colors font-semibold">
+             Collecct Review
+           </Link>
            
            {/* HÄR ÄR DEN NYA EXPORT-KOMPONENTEN */}
            <ExportActions documents={documents || []} />
@@ -103,8 +108,10 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ q
             <StatsCards documents={documents || []} />
         </div>
 
-        {/* NYA GRAFERNA */}
-        <DashboardCharts documents={documents || []} />
+        {/* NYA GRAFERNA - Lazy load för bättre prestanda */}
+        {documents && documents.length > 0 && (
+          <DashboardCharts documents={documents} />
+        )}
 
         <div className="mb-16">
           <UploadZone />
@@ -163,6 +170,9 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ q
                               >
                               Granska
                               </Link>
+                          )}
+                          {doc.status === "error" && (
+                            <RetryButton docId={doc.id} />
                           )}
                           <FileActions doc={doc} />
                         </div>
