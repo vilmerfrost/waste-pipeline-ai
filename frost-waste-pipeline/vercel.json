@@ -1,0 +1,9 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/auto-fetch",
+      "schedule": "*/5 * * * *"
+    }
+  ]
+}
+

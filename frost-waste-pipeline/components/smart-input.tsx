@@ -7,9 +7,14 @@ interface SmartInputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   description?: string;
 }
 
-export function SmartInput({ label, fieldData, description, className, ...props }: SmartInputProps) {
+export function SmartInput({ label, fieldData, description, className, onChange, ...props }: SmartInputProps) {
   const value = fieldData?.value ?? "";
   const confidence = fieldData?.confidence ?? 0;
+  
+  // Use controlled mode if onChange is provided, otherwise uncontrolled
+  const inputProps = onChange 
+    ? { value, onChange, ...props }
+    : { defaultValue: value, ...props };
 
   // Bestäm färg och stil baserat på confidence
   let statusColor = "bg-white border-slate-200 focus:ring-blue-100 focus:border-blue-400";
@@ -49,9 +54,8 @@ export function SmartInput({ label, fieldData, description, className, ...props 
         {confidenceBadge}
       </div>
       <input
-        defaultValue={value}
         className={`w-full p-3 rounded-xl outline-none transition-all shadow-sm ${statusColor} ${className}`}
-        {...props}
+        {...inputProps}
       />
       {description && <p className="text-xs text-slate-400 mt-1.5 font-light">{description}</p>}
     </div>

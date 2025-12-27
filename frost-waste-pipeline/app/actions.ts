@@ -539,3 +539,36 @@ export async function deleteMaterial(formData: FormData) {
     revalidatePath("/settings");
     revalidatePath("/review/[id]", "page");
 }
+
+/**
+ * REJECT DOCUMENT (Collecct workflow)
+ * Rejects a document for manual processing
+ */
+export async function rejectDocument(formData: FormData) {
+  const supabase = createServiceRoleClient();
+  const id = formData.get("id") as string;
+  const reason = formData.get("reason") as string | null;
+
+  // Get current extracted_data
+  const { data: currentDoc } = await supabase
+    .from("documents")
+    .select("extracted_data")
+    .eq("id", id)
+    .single();
+
+  await supabase
+    .from("documents")
+    .update({
+      status: "rejected",
+      extracted_data: {
+        ...(currentDoc?.extracted_data || {}),
+        rejected: true,
+        rejected_at: new Date().toISOString(),
+        rejection_reason: reason || "Manual rejection",
+      },
+    })
+    .eq("id", id);
+
+  revalidatePath("/collecct");
+  revalidatePath("/");
+}
