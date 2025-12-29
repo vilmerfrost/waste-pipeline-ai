@@ -63,6 +63,8 @@ export async function POST() {
             filename: fileInfo.name,
             status: "uploaded",
             storage_path: storagePath,
+            azure_original_filename: fileInfo.name, // Track original Azure filename for safe cleanup
+            source_container: fileInfo.source_folder || (fileInfo.name.endsWith('.pdf') ? 'unsupported-file-format' : 'unable-to-process'), // Track source container
             extracted_data: {
               source: "azure_failed",
               original_blob_path: fileInfo.full_path,

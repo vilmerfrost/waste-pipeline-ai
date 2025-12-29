@@ -4,6 +4,157 @@ import Anthropic from "@anthropic-ai/sdk";
 import * as XLSX from "xlsx";
 import { extractAdaptive } from "@/lib/adaptive-extraction";
 
+// ============================================================================
+// DATE EXTRACTION HELPERS
+// ============================================================================
+
+/**
+ * Extract date from filename (YYYY-MM-DD format)
+ * Handles duplicate filenames like "file (1).xlsx" by cleaning them first
+ */
+function extractDateFromFilename(filename: string): string | null {
+  // Remove (1), (2), etc. before extracting to handle duplicate filenames
+  const cleanFilename = filename.replace(/\s*\(\d+\)/g, '');
+  
+  // Try multiple patterns
+  const patterns = [
+    /(\d{4}-\d{2}-\d{2})/,           // 2025-10-13
+    /(\d{4}_\d{2}_\d{2})/,           // 2025_10_13
+    /(\d{4}\.\d{2}\.\d{2})/,         // 2025.10.13
+    /(\d{8})/,                        // 20251013
+  ];
+  
+  for (const pattern of patterns) {
+    const match = cleanFilename.match(pattern);
+    if (match) {
+      let dateStr = match[1];
+      // Convert YYYYMMDD to YYYY-MM-DD
+      if (dateStr.length === 8 && !dateStr.includes('-')) {
+        dateStr = `${dateStr.slice(0,4)}-${dateStr.slice(4,6)}-${dateStr.slice(6,8)}`;
+      }
+      // Normalize separators
+      dateStr = dateStr.replace(/[_.]/g, '-');
+      
+      // Validate date
+      const date = new Date(dateStr);
+      if (!isNaN(date.getTime()) && dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        return dateStr;
+      }
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Parse Excel date (handles serial dates and various formats)
+ */
+function parseExcelDate(value: any): string | null {
+  if (!value) return null;
+  
+  // If it's already a valid date string (YYYY-MM-DD)
+  if (typeof value === 'string' && value.match(/^\d{4}-\d{2}-\d{2}$/)) {
+    const date = new Date(value);
+    if (!isNaN(date.getTime())) {
+      return value;
+    }
+  }
+  
+  // If it's an Excel serial date (number)
+  if (typeof value === 'number' && value > 1 && value < 1000000) {
+    // Excel epoch starts Jan 1, 1900
+    const excelEpoch = new Date(1899, 11, 30);
+    const date = new Date(excelEpoch.getTime() + value * 86400000);
+    if (!isNaN(date.getTime())) {
+      return date.toISOString().split('T')[0];
+    }
+  }
+  
+  // Try parsing as date string
+  if (typeof value === 'string') {
+    // Try various formats
+    const formats = [
+      /(\d{4}-\d{2}-\d{2})/,           // YYYY-MM-DD
+      /(\d{2}\/\d{2}\/\d{4})/,         // DD/MM/YYYY
+      /(\d{4}\/\d{2}\/\d{2})/,         // YYYY/MM/DD
+      /(\d{2}\.\d{2}\.\d{4})/,         // DD.MM.YYYY
+    ];
+    
+    for (const format of formats) {
+      const match = value.match(format);
+      if (match) {
+        let dateStr = match[1];
+        // Convert DD/MM/YYYY to YYYY-MM-DD
+        if (dateStr.includes('/') && dateStr.split('/')[0].length === 2) {
+          const parts = dateStr.split('/');
+          dateStr = `${parts[2]}-${parts[1]}-${parts[0]}`;
+        }
+        // Convert DD.MM.YYYY to YYYY-MM-DD
+        if (dateStr.includes('.') && dateStr.split('.')[0].length === 2) {
+          const parts = dateStr.split('.');
+          dateStr = `${parts[2]}-${parts[1]}-${parts[0]}`;
+        }
+        
+        const date = new Date(dateStr);
+        if (!isNaN(date.getTime())) {
+          return date.toISOString().split('T')[0];
+        }
+      }
+    }
+    
+    // Try direct Date parsing
+    const date = new Date(value);
+    if (!isNaN(date.getTime())) {
+      return date.toISOString().split('T')[0];
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Validate and fix date - use filename date if extracted date seems wrong
+ */
+function validateAndFixDate(extractedDate: string | null, filenameDate: string | null, filename: string): string {
+  const today = new Date().toISOString().split('T')[0];
+  
+  // If no extracted date, use filename date or today
+  if (!extractedDate) {
+    return filenameDate || today;
+  }
+  
+  // Parse extracted date
+  const extracted = parseExcelDate(extractedDate);
+  if (!extracted) {
+    return filenameDate || today;
+  }
+  
+  // If filename has a date, compare
+  if (filenameDate) {
+    const extractedDateObj = new Date(extracted);
+    const filenameDateObj = new Date(filenameDate);
+    const todayObj = new Date(today);
+    
+    // If extracted date is more than 2 years old or in the future, use filename date
+    const twoYearsAgo = new Date();
+    twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
+    
+    if (extractedDateObj < twoYearsAgo || extractedDateObj > todayObj) {
+      console.log(`⚠️  Extracted date ${extracted} seems wrong, using filename date ${filenameDate}`);
+      return filenameDate;
+    }
+    
+    // If dates are very different (>30 days), prefer filename date
+    const diffDays = Math.abs((extractedDateObj.getTime() - filenameDateObj.getTime()) / (1000 * 60 * 60 * 24));
+    if (diffDays > 30) {
+      console.log(`⚠️  Extracted date ${extracted} differs from filename date ${filenameDate} by ${diffDays} days, using filename date`);
+      return filenameDate;
+    }
+  }
+  
+  return extracted;
+}
+
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY!,
 });
@@ -485,9 +636,13 @@ Extract ALL material rows from the table. Return JSON only!`;
     const documentInfo = parsed.documentInfo || {};
     
     // Date extraction priority: document date → filename → current date
-    const documentDate = documentInfo.date || 
-                        filenameDate || 
-                        new Date().toISOString().split('T')[0];
+    // Validate extracted date and use filename date if extracted date seems wrong
+    const rawDocumentDate = documentInfo.date ? parseExcelDate(documentInfo.date) : null;
+    const documentDate = validateAndFixDate(
+      rawDocumentDate,
+      filenameDate,
+      filename
+    );
     
     // Address extraction priority: projectAddress → address → projectName → location
     const documentAddress = documentInfo.projectAddress || 
@@ -520,9 +675,13 @@ Extract ALL material rows from the table. Return JSON only!`;
         location = documentAddress || "Okänd adress";
       }
       
+      // Validate and fix date for each item
+      const itemDate = item.date ? parseExcelDate(item.date) : null;
+      const finalItemDate = validateAndFixDate(itemDate, filenameDate, filename) || documentDate;
+      
       return {
         ...item,
-        date: item.date || documentDate, // Use document date if row has no date
+        date: finalItemDate, // Use validated date
         receiver: item.receiver || receiver,
         location: location, // Use document address if row doesn't have one
         weightKg: parseFloat(String(item.weightKg || 0)), // Ensure it's a number

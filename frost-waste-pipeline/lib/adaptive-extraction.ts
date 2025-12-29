@@ -361,26 +361,100 @@ export async function extractAdaptive(
   else if (fn.includes('renova')) receiver = "Renova";
   else if (fn.includes('nsr')) receiver = "NSR";
   
-  const dateMatch = filename.match(/(\d{4}-\d{2}-\d{2})/);
-  const documentDate = dateMatch ? dateMatch[1] : null;
+  // Extract date from filename (multiple patterns)
+  // Remove (1), (2), etc. before extracting to handle duplicate filenames
+  const cleanFilename = filename.replace(/\s*\(\d+\)/g, '');
+  const dateMatch = cleanFilename.match(/(\d{4}[-_]\d{2}[-_]\d{2})/);
+  const documentDate = dateMatch ? dateMatch[1].replace(/[-_]/g, '-') : null;
+  
+  // Helper to parse Excel dates (handles serial dates)
+  function parseExcelDate(value: any): string | null {
+    if (!value) return null;
+    if (typeof value === 'string' && value.match(/^\d{4}-\d{2}-\d{2}$/)) {
+      const date = new Date(value);
+      if (!isNaN(date.getTime())) return value;
+    }
+    if (typeof value === 'number' && value > 1 && value < 1000000) {
+      // Excel serial date
+      const excelEpoch = new Date(1899, 11, 30);
+      const date = new Date(excelEpoch.getTime() + value * 86400000);
+      if (!isNaN(date.getTime())) return date.toISOString().split('T')[0];
+    }
+    return null;
+  }
+  
+  // Helper to validate and fix dates
+  function validateAndFixDate(extractedDate: string | null, filenameDate: string | null): string {
+    const today = new Date().toISOString().split('T')[0];
+    
+    if (!extractedDate) {
+      return filenameDate || today;
+    }
+    
+    const parsed = parseExcelDate(extractedDate);
+    if (!parsed) {
+      return filenameDate || today;
+    }
+    
+    // If filename has a date, compare and prefer filename if dates differ significantly
+    if (filenameDate) {
+      const extractedDateObj = new Date(parsed);
+      const filenameDateObj = new Date(filenameDate);
+      const todayObj = new Date(today);
+      
+      // If extracted date is more than 2 years old or in the future, use filename date
+      const twoYearsAgo = new Date();
+      twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
+      
+      if (extractedDateObj < twoYearsAgo || extractedDateObj > todayObj) {
+        console.log(`⚠️  Extracted date ${parsed} seems wrong, using filename date ${filenameDate}`);
+        return filenameDate;
+      }
+      
+      // If dates differ by more than 30 days, prefer filename date
+      const diffDays = Math.abs((extractedDateObj.getTime() - filenameDateObj.getTime()) / (1000 * 60 * 60 * 24));
+      if (diffDays > 30) {
+        console.log(`⚠️  Extracted date ${parsed} differs from filename date ${filenameDate} by ${diffDays} days, using filename date`);
+        return filenameDate;
+      }
+    }
+    
+    return parsed;
+  }
   
   // Ensure all items have date and receiver
-  const processedItems = allItems.map((item: any) => ({
-    ...item,
-    date: item.date || documentDate || new Date().toISOString().split('T')[0],
-    receiver: item.receiver || receiver,
-  }));
+  const processedItems = allItems.map((item: any) => {
+    const itemDate = item.date ? parseExcelDate(item.date) : null;
+    const finalDate = validateAndFixDate(itemDate, documentDate) || new Date().toISOString().split('T')[0];
+    
+    return {
+      ...item,
+      date: finalDate,
+      receiver: item.receiver || receiver,
+    };
+  });
   
-  // STEP 3: Aggregate duplicates
+  // STEP 3: Aggregate duplicates (preserve date!)
   const grouped = new Map<string, any>();
   
   for (const item of processedItems) {
-    const key = `${item.date}|${item.location}|${item.material}|${item.receiver}`;
+    // Ensure date is set before aggregation
+    const itemDate = item.date || documentDate || new Date().toISOString().split('T')[0];
+    
+    const key = `${itemDate}|${item.location}|${item.material}|${item.receiver}`;
     
     if (grouped.has(key)) {
-      grouped.get(key)!.weightKg = (grouped.get(key)!.weightKg || 0) + (item.weightKg || 0);
+      const existing = grouped.get(key)!;
+      existing.weightKg = (existing.weightKg || 0) + (item.weightKg || 0);
+      // Preserve date if it exists
+      if (!existing.date && itemDate) {
+        existing.date = itemDate;
+      }
     } else {
-      grouped.set(key, { ...item });
+      grouped.set(key, { 
+        ...item,
+        date: itemDate, // Ensure date is always set
+      });
     }
   }
   
