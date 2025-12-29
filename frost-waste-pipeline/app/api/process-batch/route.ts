@@ -74,11 +74,14 @@ export async function POST(req: Request) {
     const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
     
     // Process each document sequentially (with small delay)
+    // 🔧 FIX: Pass document ID to /api/process
     (async () => {
       for (let i = 0; i < validIds.length; i++) {
-        console.log(`📊 Triggering processing ${i + 1}/${validIds.length}`);
+        const docId = validIds[i];
+        console.log(`📊 Triggering processing ${i + 1}/${validIds.length} (${docId})`);
         
-        await fetch(`${baseUrl}/api/process`, {
+        // ✅ FIXED: Added ?id=${docId} to pass document ID!
+        await fetch(`${baseUrl}/api/process?id=${docId}`, {
           method: "GET",
           headers: {
             "Content-Type": "application/json"

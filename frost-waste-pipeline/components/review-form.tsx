@@ -14,6 +14,43 @@ export function ReviewForm({
 }) {
   const data = initialData || {};
 
+  // State for editable document-level metadata (pre-filled from AI extraction)
+  const [documentDate, setDocumentDate] = useState("");
+  const [documentSupplier, setDocumentSupplier] = useState("");
+  const [projectAddress, setProjectAddress] = useState("");
+  const [mainReceiver, setMainReceiver] = useState("");
+  
+  // Success toast state
+  const [showSuccess, setShowSuccess] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Pre-fill metadata from AI extraction when component loads
+  useEffect(() => {
+    const metadata = data.documentMetadata || {};
+    
+    // Pre-fill from documentMetadata (from PDF extraction) or fallback to top-level fields
+    setDocumentDate(
+      metadata.date || 
+      (typeof data.date === 'object' ? data.date?.value : data.date) || 
+      ""
+    );
+    setDocumentSupplier(
+      metadata.supplier || 
+      (typeof data.supplier === 'object' ? data.supplier?.value : data.supplier) || 
+      ""
+    );
+    setProjectAddress(
+      metadata.address || 
+      (typeof data.address === 'object' ? data.address?.value : data.address) || 
+      ""
+    );
+    setMainReceiver(
+      metadata.receiver || 
+      (typeof data.receiver === 'object' ? data.receiver?.value : data.receiver) || 
+      ""
+    );
+  }, [data]);
+
   // Helper function to normalize data (handle both wrapped {value, confidence} and clean formats)
   const normalizeValue = (field: any): any => {
     if (!field) return null;
@@ -53,16 +90,6 @@ export function ReviewForm({
          (typeof data.co2Saved === 'object' ? data.co2Saved?.value : data.co2Saved) || 0,
   });
 
-  // DEBUG
-  useEffect(() => {
-    console.log("🔍 ReviewForm mounted with data:", {
-      hasData: !!data,
-      hasLineItems: !!data.lineItems,
-      lineItemsCount: data.lineItems?.length || 0,
-      lineItemsState: lineItems.length,
-      sampleItem: lineItems[0],
-    });
-  }, []);
 
   // LIVE-RÄKNARE 🧮
   useEffect(() => {
@@ -157,13 +184,15 @@ export function ReviewForm({
     setLineItems([...lineItems, newItem]);
   };
 
-  // Show address column if ANY row has address field (even if it's "SAKNAS")
-  // This allows users to fill in missing addresses
-  const hasLineAddress = lineItems.length > 0 && lineItems.some((item: any) => {
-    const addr = typeof item.address === 'object' ? item.address?.value : item.address;
-    const loc = typeof item.location === 'object' ? item.location?.value : item.location;
-    return addr !== undefined || loc !== undefined;
-  });
+  // Show address column if ANY row has address field OR if we have rows (always show for editing)
+  // This allows users to fill in missing addresses even if all rows have "SAKNAS"
+  const hasLineAddress = lineItems.length > 0 && (
+    lineItems.some((item: any) => {
+      const addr = typeof item.address === 'object' ? item.address?.value : item.address;
+      const loc = typeof item.location === 'object' ? item.location?.value : item.location;
+      return addr !== undefined || loc !== undefined;
+    }) || true // Always show if we have rows - allows editing missing addresses
+  );
   
   const hasLineReceiver = lineItems.some((item: any) => {
     const rec = typeof item.receiver === 'object' ? item.receiver?.value : item.receiver;
@@ -178,51 +207,70 @@ export function ReviewForm({
   // Handle form submission
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const formData = new FormData(e.currentTarget);
+    setIsSaving(true);
     
-    // Helper to get value from wrapped or clean format
-    const getValue = (field: any): any => {
-      if (!field) return null;
-      if (typeof field === 'object' && 'value' in field) {
-        return field.value;
-      }
-      return field;
-    };
-    
-    // Add lineItems to formData
-    lineItems.forEach((item: any, index: number) => {
-      const material = getValue(item.material);
-      const weightKg = getValue(item.weightKg);
-      const address = getValue(item.address) || getValue(item.location);
-      const receiver = getValue(item.receiver);
-      const handling = getValue(item.handling);
-      const isHazardous = getValue(item.isHazardous);
-      const co2Saved = getValue(item.co2Saved);
+    try {
+      const formData = new FormData(e.currentTarget);
       
-      formData.append(`lineItems[${index}].material`, material || "");
-      formData.append(`lineItems[${index}].weightKg`, String(weightKg || 0));
-      if (handling) {
-        formData.append(`lineItems[${index}].handling`, handling);
-      }
-      formData.append(`lineItems[${index}].isHazardous`, String(isHazardous || false));
-      if (co2Saved) {
-        formData.append(`lineItems[${index}].co2Saved`, String(co2Saved));
-      }
-      if (address && address !== "SAKNAS") {
-        formData.append(`lineItems[${index}].address`, address);
-        formData.append(`lineItems[${index}].location`, address);
-      }
-      if (receiver) {
-        formData.append(`lineItems[${index}].receiver`, receiver);
-      }
-    });
-    
-    // Add totals
-    formData.append("totalCo2Saved", String(totals.co2));
-    formData.append("weightKg", String(totals.weight));
-    formData.append("cost", String(totals.cost));
-    
-    await saveDocument(formData);
+      // Helper to get value from wrapped or clean format
+      const getValue = (field: any): any => {
+        if (!field) return null;
+        if (typeof field === 'object' && 'value' in field) {
+          return field.value;
+        }
+        return field;
+      };
+      
+      // Add lineItems to formData
+      lineItems.forEach((item: any, index: number) => {
+        const material = getValue(item.material);
+        const weightKg = getValue(item.weightKg);
+        const address = getValue(item.address) || getValue(item.location);
+        const receiver = getValue(item.receiver);
+        const handling = getValue(item.handling);
+        const isHazardous = getValue(item.isHazardous);
+        const co2Saved = getValue(item.co2Saved);
+        
+        formData.append(`lineItems[${index}].material`, material || "");
+        formData.append(`lineItems[${index}].weightKg`, String(weightKg || 0));
+        if (handling) {
+          formData.append(`lineItems[${index}].handling`, handling);
+        }
+        formData.append(`lineItems[${index}].isHazardous`, String(isHazardous || false));
+        if (co2Saved) {
+          formData.append(`lineItems[${index}].co2Saved`, String(co2Saved));
+        }
+        if (address && address !== "SAKNAS") {
+          formData.append(`lineItems[${index}].address`, address);
+          formData.append(`lineItems[${index}].location`, address);
+        }
+        if (receiver) {
+          formData.append(`lineItems[${index}].receiver`, receiver);
+        }
+      });
+      
+      // Add totals
+      formData.append("totalCo2Saved", String(totals.co2));
+      formData.append("weightKg", String(totals.weight));
+      formData.append("cost", String(totals.cost));
+      
+      // Add edited document metadata
+      formData.append("date", documentDate);
+      formData.append("supplier", documentSupplier);
+      formData.append("address", projectAddress);
+      formData.append("receiver", mainReceiver);
+      
+      await saveDocument(formData);
+      
+      // Show success toast
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 3000);
+      
+    } catch (error) {
+      console.error("Save error:", error);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -234,20 +282,46 @@ export function ReviewForm({
         <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">
           Grundläggande Information
         </h3>
+        
+        {/* Info message if metadata was auto-extracted */}
+        {data.documentMetadata && (
+          <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+            <p className="text-sm text-blue-700">
+              ℹ️ Dessa fält är förfyllda från AI-extraktionen. Du kan redigera dem om något är fel.
+            </p>
+          </div>
+        )}
+        
         <div className="grid grid-cols-2 gap-4">
-          <SmartInput
-            label="Datum"
-            name="date"
-            type="date"
-            fieldData={data.date}
-          />
-          <SmartInput
-            label="Leverantör"
-            name="supplier"
-            type="text"
-            fieldData={data.supplier}
-            description="t.ex. Returab"
-          />
+          {/* Datum - EDITABLE */}
+          <div>
+            <label className="block text-sm font-semibold text-slate-800 mb-1.5">
+              Datum
+            </label>
+            <input
+              type="date"
+              name="date"
+              value={documentDate}
+              onChange={(e) => setDocumentDate(e.target.value)}
+              className="w-full p-3 bg-white border border-slate-200 rounded-xl outline-none transition-all shadow-sm focus:ring-blue-100 focus:border-blue-400"
+            />
+          </div>
+          
+          {/* Leverantör - EDITABLE */}
+          <div>
+            <label className="block text-sm font-semibold text-slate-800 mb-1.5">
+              Leverantör
+            </label>
+            <input
+              type="text"
+              name="supplier"
+              value={documentSupplier}
+              onChange={(e) => setDocumentSupplier(e.target.value)}
+              placeholder="t.ex. Stefan Hallberg"
+              className="w-full p-3 bg-white border border-slate-200 rounded-xl outline-none transition-all shadow-sm focus:ring-blue-100 focus:border-blue-400"
+            />
+            <p className="text-xs text-slate-400 mt-1.5 font-light">t.ex. Returab</p>
+          </div>
         </div>
       </div>
 
@@ -283,18 +357,35 @@ export function ReviewForm({
           Hämtadress (Huvud)
         </h3>
         <div className="grid grid-cols-2 gap-4">
-          <SmartInput
-            label="Hämtadress"
-            name="address"
-            type="text"
-            fieldData={data.address}
-          />
-          <SmartInput
-            label="Mottagare (Huvud)"
-            name="receiver"
-            type="text"
-            fieldData={data.receiver}
-          />
+          {/* Projektadress - EDITABLE */}
+          <div>
+            <label className="block text-sm font-semibold text-slate-800 mb-1.5">
+              Projektadress
+            </label>
+            <input
+              type="text"
+              name="address"
+              value={projectAddress}
+              onChange={(e) => setProjectAddress(e.target.value)}
+              placeholder="t.ex. Östergårds Förskola"
+              className="w-full p-3 bg-white border border-slate-200 rounded-xl outline-none transition-all shadow-sm focus:ring-blue-100 focus:border-blue-400"
+            />
+          </div>
+          
+          {/* Mottagare (Huvud) - EDITABLE */}
+          <div>
+            <label className="block text-sm font-semibold text-slate-800 mb-1.5">
+              Mottagare (Huvud)
+            </label>
+            <input
+              type="text"
+              name="receiver"
+              value={mainReceiver}
+              onChange={(e) => setMainReceiver(e.target.value)}
+              placeholder="t.ex. Renova"
+              className="w-full p-3 bg-white border border-slate-200 rounded-xl outline-none transition-all shadow-sm focus:ring-blue-100 focus:border-blue-400"
+            />
+          </div>
         </div>
       </div>
 

@@ -41,10 +41,6 @@ async function _extractAllRows_DEPRECATED(
   settings: any
 ): Promise<any> {
   
-  console.log(`\n${"=".repeat(80)}`);
-  console.log(`📊 PROCESSING: ${filename}`);
-  console.log(`${"=".repeat(80)}`);
-  
   // Find header row
   let headerIndex = 0;
   for (let i = 0; i < Math.min(10, excelData.length); i++) {
@@ -55,7 +51,6 @@ async function _extractAllRows_DEPRECATED(
       String(cell).toLowerCase().includes('kvantitet')
     )) {
       headerIndex = i;
-      console.log(`✓ Header found at row ${i + 1}`);
       break;
     }
   }
@@ -66,7 +61,6 @@ async function _extractAllRows_DEPRECATED(
   );
   
   const totalRows = dataRows.length;
-  console.log(`\n📊 TOTAL ROWS TO EXTRACT: ${totalRows}`);
   
   if (totalRows === 0) {
     throw new Error("No data rows found!");
@@ -83,9 +77,6 @@ async function _extractAllRows_DEPRECATED(
   const dateMatch = filename.match(/(\d{4}-\d{2}-\d{2})/);
   const documentDate = dateMatch ? dateMatch[1] : null;
   
-  console.log(`✓ Receiver: ${receiver}`);
-  console.log(`✓ Date from filename: ${documentDate || 'NOT FOUND'}\n`);
-  
   // Material synonyms
   const synonyms = Object.entries(settings.material_synonyms || {})
     .map(([std, syns]) => `${std}: ${(syns as string[]).join(", ")}`)
@@ -95,16 +86,12 @@ async function _extractAllRows_DEPRECATED(
   const CHUNK_SIZE = 150; // Haiku can handle larger chunks
   const totalChunks = Math.ceil(totalRows / CHUNK_SIZE);
   
-  console.log(`📦 CHUNKING: ${totalChunks} chunks of ${CHUNK_SIZE} rows each\n`);
-  
   const allItems: any[] = [];
   
   for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
     const start = chunkIndex * CHUNK_SIZE;
     const end = Math.min(start + CHUNK_SIZE, totalRows);
     const chunkRows = dataRows.slice(start, end);
-    
-    console.log(`📦 Chunk ${chunkIndex + 1}/${totalChunks}: rows ${start + 1}-${end}`);
     
     // Convert to TSV
     const tsv = [header, ...chunkRows]
@@ -185,7 +172,7 @@ Extract ALL ${chunkRows.length} rows from this chunk!`;
             const lastBrace = cleaned.lastIndexOf('}');
             if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
               parsed = JSON.parse(cleaned.substring(firstBrace, lastBrace + 1));
-            } else {
+      } else {
               throw new Error("No JSON found");
             }
           } catch (e2: any) {
@@ -217,7 +204,6 @@ Extract ALL ${chunkRows.length} rows from this chunk!`;
         allItems.push(...processedItems);
         chunkSuccess = true;
         
-        console.log(`   ✓ Extracted ${processedItems.length} rows (${model === "claude-haiku-4-5-20251001" ? "Haiku" : "Sonnet"})`);
         break; // Success, exit retry loop
         
       } catch (error: any) {
@@ -243,7 +229,6 @@ Extract ALL ${chunkRows.length} rows from this chunk!`;
     }
   }
   
-  console.log(`\n✅ TOTAL EXTRACTED: ${allItems.length} rows (expected: ${totalRows})`);
   
   if (allItems.length < totalRows * 0.9) {
     console.warn(`⚠️ WARNING: Only got ${allItems.length}/${totalRows} rows!`);
@@ -350,10 +335,6 @@ async function extractFromPDF(
   settings: any
 ): Promise<any> {
   
-  console.log(`\n${"=".repeat(80)}`);
-  console.log(`📄 PROCESSING PDF: ${filename}`);
-  console.log(`${"=".repeat(80)}`);
-  
   // Convert PDF to base64
   const base64Data = Buffer.from(pdfBuffer).toString("base64");
   
@@ -366,10 +347,7 @@ async function extractFromPDF(
   
   // Extract date from filename
   const dateMatch = filename.match(/(\d{4}-\d{2}-\d{2})/);
-  const documentDate = dateMatch ? dateMatch[1] : null;
-  
-  console.log(`✓ Receiver: ${receiver}`);
-  console.log(`✓ Date from filename: ${documentDate || 'NOT FOUND'}\n`);
+  const filenameDate = dateMatch ? dateMatch[1] : null;
   
   // Material synonyms
   const synonyms = Object.entries(settings.material_synonyms || {})
@@ -377,10 +355,16 @@ async function extractFromPDF(
     .join("\n");
   
   // Build extraction prompt - Extract document-level info AND table rows
-  const prompt = `Extract ALL waste data from this Swedish PDF document.
+  const prompt = `Extract ALL waste data AND document metadata from this Swedish PDF.
+
+CRITICAL METADATA TO EXTRACT:
+1. DOCUMENT DATE: Look for date in header ("Datum:", "Datum:"), footer, or most common date in table rows
+2. PROJECT/ADDRESS: Look for project name, "Projekt:", address at top of document
+3. SUPPLIER/SENDER: Look for company name at bottom, footer, sender info, email signature area
+4. RECEIVER: Who receives the waste (may be in table or header)
 
 CRITICAL: This PDF has TWO types of information:
-1. DOCUMENT-LEVEL info (at top/header): Project name, address, project location
+1. DOCUMENT-LEVEL info (at top/header/footer): Date, supplier, project name, address
 2. TABLE ROWS: Material, weight, receiver, etc.
 
 EXTRACT BOTH!
@@ -391,14 +375,17 @@ ${synonyms}
 OUTPUT FORMAT (JSON, no markdown, NO {value, confidence} wrappers):
 {
   "documentInfo": {
+    "date": "2025-09-18",                    // From header/footer OR most common date in table
     "projectName": "Östergårds Förskola",
-    "address": "Östergårds Förskola",
-    "date": "${documentDate || "2024-01-16"}"
+    "projectAddress": "Östergårds Förskola, Malmö",
+    "address": "Östergårds Förskola",        // Same as projectAddress
+    "supplier": "Stefan Hallberg",           // From footer/bottom/sender
+    "receiver": "${receiver}"                 // Use this if not in document
   },
   "items": [
     {
-      "date": "${documentDate || "2024-01-16"}",
-      "location": "USE_DOCUMENT_ADDRESS",
+      "date": "2025-09-18",                  // Row date OR document date
+      "location": "USE_DOCUMENT_ADDRESS",     // Use if no per-row address
       "material": "Trä",
       "weightKg": 3820,
       "unit": "Kg",
@@ -408,13 +395,20 @@ OUTPUT FORMAT (JSON, no markdown, NO {value, confidence} wrappers):
 }
 
 RULES:
-1. Extract document-level address from header/top of PDF (look for "Projekt:", "Adress:", etc.)
-2. If table has NO address/location column, use "USE_DOCUMENT_ADDRESS" as location marker
-3. Extract project name from document header if available
-4. All weights in kg (convert from ton: × 1000, from g: ÷ 1000)
-5. Extract EVERY row from table
-6. Use "${receiver}" as receiver if not specified
-7. Use "${documentDate || 'current date'}" as date if not in document
+1. Extract document date from header/footer FIRST (look for "Datum:", date near top/bottom)
+2. If no header date, use most common date found in table rows
+3. Extract supplier/company name from bottom of document, footer, or sender area
+4. Extract document-level address from header/top (look for "Projekt:", "Adress:", etc.)
+5. If table has NO address/location column, use "USE_DOCUMENT_ADDRESS" as location marker
+6. If table has NO date column, use document date for all rows
+7. All weights in kg (convert from ton: × 1000, from g: ÷ 1000)
+8. Extract EVERY row from table
+9. Use "${receiver}" as receiver if not specified
+
+FALLBACKS (if not found in document):
+- Date: Use "${filenameDate || new Date().toISOString().split('T')[0]}"
+- Supplier: Use "Okänd leverantör"
+- Address: Use "Okänd adress"
 
 WEIGHT CONVERSION:
 - If unit is "ton" or "t": multiply by 1000
@@ -426,8 +420,6 @@ Return values directly: "material": "Betong" NOT "material": {"value": "Betong"}
 Extract ALL material rows from the table. Return JSON only!`;
 
   try {
-    console.log("📤 Sending PDF to Claude Vision API...");
-    
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-5-20250929", // Use Sonnet for better PDF OCR quality
       max_tokens: 16384,
@@ -489,18 +481,26 @@ Extract ALL material rows from the table. Return JSON only!`;
       }
     }
     
-    // Extract document-level info
+    // Extract document-level info with improved fallbacks
     const documentInfo = parsed.documentInfo || {};
-    const documentAddress = documentInfo.address || 
+    
+    // Date extraction priority: document date → filename → current date
+    const documentDate = documentInfo.date || 
+                        filenameDate || 
+                        new Date().toISOString().split('T')[0];
+    
+    // Address extraction priority: projectAddress → address → projectName → location
+    const documentAddress = documentInfo.projectAddress || 
+                            documentInfo.address || 
                             documentInfo.projectName || 
                             documentInfo.location ||
                             null;
     
-    if (documentAddress) {
-      console.log(`✓ Document address found: ${documentAddress}`);
-    } else {
-      console.log(`⚠️ No document address found in PDF header`);
-    }
+    // Supplier extraction: from footer/bottom of document
+    const documentSupplier = documentInfo.supplier || 
+                             documentInfo.sender ||
+                             "Okänd leverantör";
+    
     
     const rawItems = parsed.items || [];
     
@@ -522,21 +522,13 @@ Extract ALL material rows from the table. Return JSON only!`;
       
       return {
         ...item,
-        date: item.date || documentInfo.date || documentDate || new Date().toISOString().split('T')[0],
+        date: item.date || documentDate, // Use document date if row has no date
         receiver: item.receiver || receiver,
         location: location, // Use document address if row doesn't have one
         weightKg: parseFloat(String(item.weightKg || 0)), // Ensure it's a number
       };
     });
     
-    if (documentAddress) {
-      const rowsWithDocumentAddress = processedItems.filter((item: any) => 
-        item.location === documentAddress
-      ).length;
-      console.log(`✓ Applied document address to ${rowsWithDocumentAddress} rows`);
-    }
-    
-    console.log(`✅ Extracted ${processedItems.length} items from PDF`);
     
     // Aggregate by primary key
     const grouped = new Map<string, any>();
@@ -571,14 +563,6 @@ Extract ALL material rows from the table. Return JSON only!`;
     const uniqueAddresses = new Set(aggregated.map((item: any) => item.location)).size;
     const uniqueMaterials = new Set(aggregated.map((item: any) => item.material)).size;
     
-    console.log(`\n📊 AGGREGATION:`);
-    console.log(`   Original: ${processedItems.length} items`);
-    console.log(`   Aggregated: ${aggregated.length} items`);
-    console.log(`   Merged: ${processedItems.length - aggregated.length} duplicates`);
-    console.log(`   Total weight: ${totalWeight.toFixed(2)} kg = ${(totalWeight/1000).toFixed(2)} ton`);
-    console.log(`   Unique addresses: ${uniqueAddresses}`);
-    console.log(`   Unique materials: ${uniqueMaterials}`);
-    console.log(`${"=".repeat(80)}\n`);
     
     // Calculate total cost if available
     const totalCostSEK = aggregated.reduce((sum: number, item: any) => {
@@ -602,6 +586,13 @@ Extract ALL material rows from the table. Return JSON only!`;
       uniqueAddresses,
       uniqueReceivers: 1,
       uniqueMaterials,
+      // Store document-level metadata for UI display
+      documentMetadata: {
+        date: documentDate,
+        address: documentAddress || "Okänd adress",
+        supplier: documentSupplier,
+        receiver: receiver
+      },
       _validation: {
         completeness: processedItems.length > 0 ? 95 : 0,
         confidence: 90,
@@ -618,30 +609,65 @@ Extract ALL material rows from the table. Return JSON only!`;
 // ============================================================================
 // MAIN PROCESS ROUTE
 // ============================================================================
-export async function GET() {
+export async function GET(req: Request) {
   let docId: string | null = null;
   
   try {
     const supabase = createServiceRoleClient();
     const settings = await getSettings();
     
-    // Get next document to process
-    const { data: doc, error } = await supabase
-      .from("documents")
-      .select("*")
-      .eq("status", "processing")
-      .order("created_at", { ascending: true })
-      .limit(1)
-      .single();
+    // Check if document ID is provided in query params (for batch processing)
+    const { searchParams } = new URL(req.url);
+    const requestedDocId = searchParams.get("id");
     
-    if (error || !doc) {
-      return NextResponse.json({
-        success: false,
-        message: "No documents to process"
-      });
+    let doc: any;
+    
+    if (requestedDocId) {
+      // Process specific document by ID
+      const { data, error } = await supabase
+        .from("documents")
+        .select("*")
+        .eq("id", requestedDocId)
+        .single();
+      
+      if (error || !data) {
+        return NextResponse.json({
+          success: false,
+          error: `Document ${requestedDocId} not found`
+        }, { status: 404 });
+      }
+      
+      // Check if document is in correct status
+      if (data.status !== "processing") {
+        return NextResponse.json({
+          success: false,
+          error: `Document ${requestedDocId} is not in 'processing' status (current: ${data.status})`
+        }, { status: 400 });
+      }
+      
+      doc = data;
+      docId = doc.id;
+    } else {
+      // Get next document to process (original behavior)
+      const { data: fetchedDoc, error } = await supabase
+        .from("documents")
+        .select("*")
+        .eq("status", "processing")
+        .order("created_at", { ascending: true })
+        .limit(1)
+        .single();
+      
+      if (error || !fetchedDoc) {
+        return NextResponse.json({
+          success: false,
+          message: "No documents to process"
+        });
+      }
+      
+      doc = fetchedDoc;
+      docId = doc.id;
     }
     
-    docId = doc.id; // Store for error handling
     console.log(`\n🔄 Processing: ${doc.filename}`);
     
     // Download file from URL or storage path
@@ -673,7 +699,6 @@ export async function GET() {
     let extractedData: any;
     
     if (isExcel) {
-      console.log("📊 Excel file detected - using ADAPTIVE extraction");
       
       // EXCEL PROCESSING WITH ADAPTIVE EXTRACTION
       const workbook = XLSX.read(arrayBuffer);
@@ -739,7 +764,6 @@ export async function GET() {
       })
       .eq("id", doc.id);
     
-    console.log(`✅ Processing complete: ${doc.filename}`);
     console.log(`   Status: ${newStatus}`);
     console.log(`   Completeness: ${completeness.toFixed(1)}%`);
     console.log(`   Confidence: ${overallConfidence.toFixed(1)}%`);

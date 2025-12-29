@@ -449,48 +449,100 @@ export async function reVerifyDocument(documentId: string) {
 export async function saveDocument(formData: FormData) {
   const supabase = createServiceRoleClient();
   const id = formData.get("id") as string;
-  const verified = (val: FormDataEntryValue | null) => ({ value: val ? String(val) : null, confidence: 1.0 });
-  const numVerified = (val: FormDataEntryValue | null) => ({ value: val ? Number(val) : 0, confidence: 1.0 });
-
-  // 1. PARSA LINE ITEMS
-  const lineItemsMap: Record<number, any> = {};
-  for (const [key, value] of Array.from(formData.entries())) {
-    const match = key.match(/^lineItems\[(\d+)\]\.(.+)$/);
-    if (match) {
-      const index = Number(match[1]);
-      const field = match[2];
-      if (!lineItemsMap[index]) lineItemsMap[index] = {};
-
-      if (field === "weightKg" || field === "co2Saved") {
-        lineItemsMap[index][field] = { value: Number(value), confidence: 1.0 };
-      } else if (field === "isHazardous") {
-        lineItemsMap[index][field] = { value: value === "true", confidence: 1.0 };
-      } else {
-        lineItemsMap[index][field] = { value: String(value), confidence: 1.0 };
-      }
-    }
+  
+  // Get existing document to preserve all data
+  const { data: existingDoc } = await supabase
+    .from("documents")
+    .select("*")
+    .eq("id", id)
+    .single();
+  
+  if (!existingDoc) {
+    throw new Error("Document not found");
   }
-  const lineItemsArray = Object.values(lineItemsMap);
-
-  // 2. SPARA DOKUMENT
-  await supabase.from("documents").update({
-      status: "verified",
-      extracted_data: { 
-        date: verified(formData.get("date")),
-        supplier: verified(formData.get("supplier")),
-        material: verified(formData.get("material")),
-        weightKg: numVerified(formData.get("weightKg")), // Detta skrivs över av Live-Matte om man vill, men sparas här
-        cost: numVerified(formData.get("cost")),
-        totalCo2Saved: numVerified(formData.get("totalCo2Saved")),
-        address: verified(formData.get("address")),
-        receiver: verified(formData.get("receiver")),
-        lineItems: lineItemsArray
-      }
-    }).eq("id", id);
-
-  revalidatePath("/");
-
-  // 3. HITTA NÄSTA DOKUMENT ATT GRANSKA (Spara & Nästa) ⏭️
+  
+  const existingData = existingDoc.extracted_data || {};
+  
+  // Get edited document metadata from form
+  const editedDate = formData.get("date") as string;
+  const editedSupplier = formData.get("supplier") as string;
+  const editedAddress = formData.get("address") as string;
+  const editedReceiver = formData.get("receiver") as string;
+  
+  // Get lineItems from form
+  const lineItems: any[] = [];
+  let index = 0;
+  while (formData.get(`lineItems[${index}].material`) !== null) {
+    const material = formData.get(`lineItems[${index}].material`) as string;
+    const weightKg = parseFloat(formData.get(`lineItems[${index}].weightKg`) as string || "0");
+    const address = formData.get(`lineItems[${index}].address`) as string;
+    const location = formData.get(`lineItems[${index}].location`) as string;
+    const receiver = formData.get(`lineItems[${index}].receiver`) as string;
+    const handling = formData.get(`lineItems[${index}].handling`) as string;
+    const isHazardous = formData.get(`lineItems[${index}].isHazardous`) === "true";
+    const co2Saved = parseFloat(formData.get(`lineItems[${index}].co2Saved`) as string || "0");
+    
+    if (material || weightKg > 0) {
+      lineItems.push({
+        material: { value: material || "", confidence: 1 },
+        weightKg: { value: weightKg, confidence: 1 },
+        address: address ? { value: address, confidence: 1 } : undefined,
+        location: location ? { value: location, confidence: 1 } : undefined,
+        receiver: receiver ? { value: receiver, confidence: 1 } : undefined,
+        handling: handling ? { value: handling, confidence: 1 } : undefined,
+        isHazardous: { value: isHazardous, confidence: 1 },
+        co2Saved: co2Saved > 0 ? { value: co2Saved, confidence: 1 } : undefined,
+      });
+    }
+    index++;
+  }
+  
+  // Get totals
+  const totalCo2Saved = parseFloat(formData.get("totalCo2Saved") as string || "0");
+  const weightKg = parseFloat(formData.get("weightKg") as string || "0");
+  const cost = parseFloat(formData.get("cost") as string || "0");
+  
+  // Calculate total weight from lineItems if not provided
+  const calculatedWeight = lineItems.reduce(
+    (sum, item) => sum + (Number(item.weightKg?.value) || 0),
+    0
+  );
+  const finalWeight = weightKg || calculatedWeight;
+  
+  // Update extracted_data with edited values
+  const updatedData = {
+    ...existingData,
+    lineItems,
+    totalWeightKg: finalWeight,
+    totalCostSEK: cost,
+    totalCo2Saved,
+    // Update document-level metadata with edited values
+    documentMetadata: {
+      date: editedDate || existingData.documentMetadata?.date || "",
+      supplier: editedSupplier || existingData.documentMetadata?.supplier || "",
+      address: editedAddress || existingData.documentMetadata?.address || "",
+      receiver: editedReceiver || existingData.documentMetadata?.receiver || "",
+    },
+    // Also update top-level fields for backward compatibility
+    date: { value: editedDate || "", confidence: 1 },
+    supplier: { value: editedSupplier || "", confidence: 1 },
+    address: { value: editedAddress || "", confidence: 1 },
+    receiver: { value: editedReceiver || "", confidence: 1 },
+  };
+  
+  await supabase
+    .from("documents")
+    .update({
+      extracted_data: updatedData,
+      status: "approved",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id);
+  
+  revalidatePath("/collecct");
+  revalidatePath(`/review/${id}`);
+  
+  // HITTA NÄSTA DOKUMENT ATT GRANSKA (Spara & Nästa) ⏭️
   const { data: nextDoc } = await supabase
     .from("documents")
     .select("id")
@@ -502,7 +554,7 @@ export async function saveDocument(formData: FormData) {
   if (nextDoc) {
     redirect(`/review/${nextDoc.id}`);
   } else {
-    redirect("/");
+    redirect("/collecct");
   }
 }
 // (Behåll övriga exporterade funktioner)

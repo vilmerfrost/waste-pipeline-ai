@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { Loader2 } from "lucide-react";
+import { BatchResultModal } from "./batch-result-modal";
 
 interface BatchProcessButtonProps {
   uploadedDocs: any[];
@@ -10,6 +12,8 @@ interface BatchProcessButtonProps {
 export function BatchProcessButton({ uploadedDocs, onSuccess }: BatchProcessButtonProps) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedDocs, setSelectedDocs] = useState<Set<string>>(new Set());
+  const [showResultModal, setShowResultModal] = useState(false);
+  const [batchResults, setBatchResults] = useState<any>(null);
   
   const toggleDoc = (docId: string) => {
     const newSelected = new Set(selectedDocs);
@@ -29,6 +33,31 @@ export function BatchProcessButton({ uploadedDocs, onSuccess }: BatchProcessButt
     setSelectedDocs(new Set());
   };
   
+  // Poll for document status until processing is complete
+  const pollDocumentStatus = async (docId: string, maxAttempts = 60): Promise<any> => {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds between polls
+      
+      try {
+        const response = await fetch(`/api/document-status?id=${docId}`);
+        if (!response.ok) continue;
+        
+        const data = await response.json();
+        const doc = data.document;
+        
+        // If no longer processing, return the result
+        if (doc.status !== "processing") {
+          return doc;
+        }
+      } catch (error) {
+        console.error("Poll error:", error);
+      }
+    }
+    
+    // Timeout - return error status
+    return { id: docId, status: "error", error: "Processing timeout" };
+  };
+  
   const processBatch = async () => {
     if (selectedDocs.size === 0) {
       alert("Välj minst ett dokument att granska");
@@ -36,14 +65,14 @@ export function BatchProcessButton({ uploadedDocs, onSuccess }: BatchProcessButt
     }
     
     setIsProcessing(true);
+    const documentIds = Array.from(selectedDocs);
     
     try {
+      // Start batch processing
       const response = await fetch("/api/process-batch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          documentIds: Array.from(selectedDocs) 
-        })
+        body: JSON.stringify({ documentIds })
       });
       
       if (!response.ok) {
@@ -51,16 +80,44 @@ export function BatchProcessButton({ uploadedDocs, onSuccess }: BatchProcessButt
         throw new Error(error.error || "Batch processing failed");
       }
       
-      const data = await response.json();
-      console.log(`✓ Batch processing started for ${data.count} documents`);
+      // Poll all documents for completion
+      const results: any[] = [];
+      for (const docId of documentIds) {
+        const doc = await pollDocumentStatus(docId);
+        results.push(doc);
+      }
       
-      // Reload page after a delay
-      setTimeout(() => {
-        if (onSuccess) onSuccess();
-        window.location.reload();
-      }, 2000);
+      // Process results
+      const documents = results.map(doc => {
+        const extractedData = doc.extracted_data || {};
+        const validation = extractedData._validation || {};
+        
+        return {
+          documentId: doc.id,
+          filename: doc.filename || "Okänt dokument",
+          status: doc.status,
+          confidence: validation.confidence || extractedData.metadata?.confidence,
+          qualityScore: validation.qualityScore || validation.completeness,
+          error: doc.status === "error" ? (doc.error || "Bearbetning misslyckades") : undefined
+        };
+      });
       
-    } catch (error) {
+      const approved = documents.filter(d => d.status === "approved").length;
+      const needsReview = documents.filter(d => d.status === "needs_review").length;
+      const failed = documents.filter(d => d.status === "error").length;
+      
+      setBatchResults({
+        total: documents.length,
+        approved,
+        needsReview,
+        failed,
+        documents
+      });
+      
+      setShowResultModal(true);
+      setIsProcessing(false);
+      
+    } catch (error: any) {
       console.error("Batch process error:", error);
       alert("Kunde inte starta batch-granskning. Försök igen.");
       setIsProcessing(false);
@@ -70,7 +127,25 @@ export function BatchProcessButton({ uploadedDocs, onSuccess }: BatchProcessButt
   if (uploadedDocs.length === 0) return null;
   
   return (
-    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+    <>
+      {/* Loading Overlay */}
+      {isProcessing && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 shadow-xl max-w-md mx-4">
+            <div className="flex items-center gap-4">
+              <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
+              <div>
+                <h3 className="font-semibold text-gray-900">Processar dokument</h3>
+                <p className="text-sm text-gray-600">
+                  Behandlar {selectedDocs.size} dokument...
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
       <div className="flex items-center justify-between mb-3">
         <div>
           <h3 className="font-semibold text-blue-900">
@@ -135,17 +210,24 @@ export function BatchProcessButton({ uploadedDocs, onSuccess }: BatchProcessButt
       >
         {isProcessing ? (
           <span className="flex items-center justify-center gap-2">
-            <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-            </svg>
+            <Loader2 className="w-5 h-5 animate-spin" />
             Behandlar {selectedDocs.size} dokument...
           </span>
         ) : (
           `Granska ${selectedDocs.size > 0 ? selectedDocs.size : 'valda'} dokument`
         )}
       </button>
-    </div>
+      </div>
+      
+      <BatchResultModal
+        isOpen={showResultModal}
+        onClose={() => {
+          setShowResultModal(false);
+          if (onSuccess) onSuccess();
+        }}
+        results={batchResults}
+      />
+    </>
   );
 }
 

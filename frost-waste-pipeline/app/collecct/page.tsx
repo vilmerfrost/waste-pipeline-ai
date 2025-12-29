@@ -4,35 +4,72 @@ import { FileText, CheckCircle2, AlertCircle, Activity, RefreshCw, ArrowLeft, Do
 import { AutoFetchButton } from "@/components/auto-fetch-button";
 import { BatchProcessButton } from "@/components/batch-process-button";
 import { GranskaButton } from "@/components/granska-button";
+import { ExportToAzureButton } from "@/components/export-to-azure-button";
 
 export const dynamic = "force-dynamic";
 
-export default async function CollecctDashboard() {
+export default async function CollecctDashboard({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string }>;
+}) {
   const supabase = createServiceRoleClient();
+  const params = await searchParams;
+  const activeTab = params.tab || "active";
 
-  // Fetch documents
-  const { data: documents } = await supabase
+  // Fetch documents - filter by tab
+  let documentsQuery = supabase
     .from("documents")
     .select("*")
     .order("created_at", { ascending: false });
 
-  // Filter documents by status
-  const uploadedDocs = documents?.filter(d => d.status === "uploaded") || [];
-  const processingDocs = documents?.filter(d => d.status === "processing") || [];
-  const needsReviewDocs = documents?.filter(d => d.status === "needs_review") || [];
-  const approvedDocs = documents?.filter(d => d.status === "approved") || [];
-  const failedDocs = documents?.filter(d => d.status === "error") || [];
+  // Filter: Active tab shows non-exported, Archive tab shows exported
+  if (activeTab === "archive") {
+    // Archive: show exported documents
+    documentsQuery = documentsQuery.not("exported_at", "is", null);
+  } else {
+    // Active: show non-exported documents
+    documentsQuery = documentsQuery.is("exported_at", null);
+  }
+
+  const { data: documents } = await documentsQuery;
+
+  // Filter documents by status (only for active tab)
+  const uploadedDocs = activeTab === "active" 
+    ? documents?.filter(d => d.status === "uploaded") || []
+    : [];
+  const processingDocs = activeTab === "active"
+    ? documents?.filter(d => d.status === "processing") || []
+    : [];
+  const needsReviewDocs = activeTab === "active"
+    ? documents?.filter(d => d.status === "needs_review") || []
+    : [];
+  const approvedDocs = activeTab === "active"
+    ? documents?.filter(d => d.status === "approved") || []
+    : [];
+  const failedDocs = activeTab === "active"
+    ? documents?.filter(d => d.status === "error") || []
+    : [];
+  const exportedDocs = activeTab === "archive"
+    ? documents?.filter(d => d.status === "exported") || []
+    : [];
 
   const stats = {
-    total: documents?.length || 0,
+    total: activeTab === "active" 
+      ? (documents?.filter(d => !d.exported_at).length || 0)
+      : (documents?.filter(d => d.exported_at).length || 0),
     uploaded: uploadedDocs.length,
     processing: processingDocs.length,
     needsReview: needsReviewDocs.length,
     approved: approvedDocs.length,
     failed: failedDocs.length,
+    exported: exportedDocs.length,
   };
 
-  const recentDocs = documents?.slice(0, 3) || [];
+  // Show documents based on active tab
+  const recentDocs = activeTab === "archive"
+    ? exportedDocs.slice(0, 50) // Show more in archive
+    : documents?.slice(0, 50) || [];
 
   // Calculate quality metrics
   const avgCompleteness = documents && documents.length > 0
@@ -60,10 +97,11 @@ export default async function CollecctDashboard() {
 
             {/* Right: Action buttons */}
             <div className="flex items-center gap-3">
-              <button className="flex items-center gap-2 px-4 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors">
-                <Download className="w-4 h-4" />
-                <span>Ladda ner</span>
-              </button>
+              {activeTab === "active" && approvedDocs.length > 0 && (
+                <ExportToAzureButton 
+                  selectedDocuments={approvedDocs.map(d => d.id)}
+                />
+              )}
               
               <Link
                 href="/health"
@@ -103,6 +141,30 @@ export default async function CollecctDashboard() {
           <p className="text-sm text-gray-600">
             Granska och godkänn dokument för Collecct AB.
           </p>
+          
+          {/* Tabs */}
+          <div className="flex gap-2 border-b border-gray-200 mt-6">
+            <a
+              href="/collecct?tab=active"
+              className={`px-4 py-2 text-sm font-medium transition-colors ${
+                activeTab === "active" || !activeTab
+                  ? "text-blue-600 border-b-2 border-blue-600"
+                  : "text-gray-600 hover:text-gray-900"
+              }`}
+            >
+              Aktiva ({documents?.filter(d => !d.exported_at).length || 0})
+            </a>
+            <a
+              href="/collecct?tab=archive"
+              className={`px-4 py-2 text-sm font-medium transition-colors ${
+                activeTab === "archive"
+                  ? "text-blue-600 border-b-2 border-blue-600"
+                  : "text-gray-600 hover:text-gray-900"
+              }`}
+            >
+              Arkiverade ({documents?.filter(d => d.exported_at).length || 0})
+            </a>
+          </div>
         </div>
       </div>
 
@@ -157,7 +219,7 @@ export default async function CollecctDashboard() {
               {stats.approved}
             </div>
             <p className="text-xs text-gray-500">
-              {stats.total > 0 ? `${Math.round((stats.approved / stats.total) * 100)}%` : '0%'}
+              {activeTab === "active" ? "Redo för export" : "Exporterade"}
             </p>
           </div>
 
@@ -188,16 +250,21 @@ export default async function CollecctDashboard() {
           </div>
 
           {recentDocs.length === 0 ? (
-            <div className="bg-white rounded-lg border border-gray-200 p-12 text-center">
-              <div className="inline-flex items-center justify-center w-16 h-16 bg-gray-100 rounded-full mb-4">
-                <FileText className="w-8 h-8 text-gray-400" />
+            <div className="bg-white rounded-lg border-2 border-dashed border-gray-300 p-16 text-center">
+              <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-50 rounded-full mb-4">
+                <FileText className="w-8 h-8 text-blue-600" />
               </div>
-              <h3 className="text-lg font-medium text-gray-900 mb-2">
-                Inga dokument än
+              <h3 className="text-xl font-semibold text-gray-900 mb-2">
+                {activeTab === "archive" 
+                  ? "Inga arkiverade dokument ännu"
+                  : "Inga dokument ännu"}
               </h3>
-              <p className="text-sm text-gray-500">
-                Synka från Azure för att ladda dokument
+              <p className="text-gray-600 mb-6">
+                {activeTab === "archive"
+                  ? "Exporterade dokument visas här"
+                  : "Börja med att synka dokument från Azure"}
               </p>
+              {activeTab === "active" && <AutoFetchButton />}
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -213,7 +280,10 @@ export default async function CollecctDashboard() {
                 // Status color
                 let statusColor = "gray";
                 let statusText = "Laddat upp";
-                if (doc.status === "needs_review") {
+                if (doc.status === "exported") {
+                  statusColor = "purple";
+                  statusText = "Exporterad";
+                } else if (doc.status === "needs_review") {
                   statusColor = "yellow";
                   statusText = "Väntar";
                 } else if (doc.status === "approved") {
@@ -253,19 +323,21 @@ export default async function CollecctDashboard() {
                           </div>
                         </div>
                         {/* Status Badge */}
-                        <div className={`px-2 py-1 rounded-full text-xs font-medium whitespace-nowrap ${
+                        <div className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-all ${
                           doc.status === 'uploaded' ? 'bg-blue-100 text-blue-800' :
-                          doc.status === 'processing' ? 'bg-yellow-100 text-yellow-800' :
-                          doc.status === 'needs_review' ? 'bg-orange-100 text-orange-800' :
+                          doc.status === 'processing' ? 'bg-blue-100 text-blue-800 animate-pulse' :
+                          doc.status === 'needs_review' ? 'bg-yellow-100 text-yellow-800' :
                           doc.status === 'approved' ? 'bg-green-100 text-green-800' :
+                          doc.status === 'exported' ? 'bg-purple-100 text-purple-800' :
                           doc.status === 'error' ? 'bg-red-100 text-red-800' :
                           'bg-gray-100 text-gray-800'
                         }`}>
-                          {doc.status === 'uploaded' && '🔵 Uppladdad'}
-                          {doc.status === 'processing' && '🟡 Behandlar...'}
-                          {doc.status === 'needs_review' && '🟠 Behöver granskning'}
-                          {doc.status === 'approved' && '🟢 Godkänd'}
-                          {doc.status === 'error' && '🔴 Fel'}
+                          {doc.status === 'uploaded' && 'Uppladdad'}
+                          {doc.status === 'processing' && '🔄 Behandlar...'}
+                          {doc.status === 'needs_review' && 'Behöver granskning'}
+                          {doc.status === 'approved' && '✅ Godkänd'}
+                          {doc.status === 'exported' && '📤 Exporterad'}
+                          {doc.status === 'error' && '❌ Fel'}
                         </div>
                       </div>
                     </div>
@@ -330,7 +402,7 @@ export default async function CollecctDashboard() {
                     {/* Action Button */}
                     <div className="p-5 pt-0">
                       {doc.status === 'uploaded' && (
-                        <GranskaButton documentId={doc.id} />
+                        <GranskaButton documentId={doc.id} filename={doc.filename} />
                       )}
                       {doc.status === 'processing' && (
                         <div className="px-4 py-2 bg-gray-100 text-gray-600 rounded-lg font-medium flex items-center justify-center gap-2">
@@ -356,6 +428,34 @@ export default async function CollecctDashboard() {
                         >
                           Se detaljer
                         </Link>
+                      )}
+                      {doc.status === 'exported' && (
+                        <div className="space-y-2">
+                          <div className="px-4 py-2 bg-purple-50 border border-purple-200 rounded-lg text-center">
+                            <p className="text-xs text-purple-700 font-medium">📤 Exporterad</p>
+                            {doc.exported_at && (
+                              <p className="text-xs text-purple-600 mt-1">
+                                {new Date(doc.exported_at).toLocaleDateString('sv-SE', {
+                                  year: 'numeric',
+                                  month: '2-digit',
+                                  day: '2-digit',
+                                  hour: '2-digit',
+                                  minute: '2-digit'
+                                })}
+                              </p>
+                            )}
+                          </div>
+                          {doc.extracted_data?.azure_export_url && (
+                            <a
+                              href={doc.extracted_data.azure_export_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="block w-full py-2 px-4 bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium rounded-lg transition-colors text-center"
+                            >
+                              Öppna i Azure
+                            </a>
+                          )}
+                        </div>
                       )}
                       {doc.status === 'error' && (
                         <Link

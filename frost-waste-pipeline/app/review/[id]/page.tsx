@@ -141,10 +141,6 @@ export default async function ReviewPage({
       }
     }
     
-    console.log("📊 Column detection:");
-    console.log("  Mandatory:", MANDATORY_FIELDS);
-    console.log("  Optional (found):", existingOptional);
-    console.log("  Optional (not found):", OPTIONAL_FIELDS.filter(f => !existingOptional.includes(f)));
     
     return {
       mandatory: MANDATORY_FIELDS,
@@ -265,6 +261,50 @@ export default async function ReviewPage({
             </div>
           </div>
         </div>
+
+        {/* DOCUMENT METADATA */}
+        {extractedData.documentMetadata && (
+          <div className="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-6">
+            <h2 className="text-lg font-semibold text-blue-900 mb-4 flex items-center gap-2">
+              <FileText className="w-5 h-5" />
+              Dokumentinformation
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              {extractedData.documentMetadata.date && (
+                <div>
+                  <label className="text-sm font-medium text-blue-700 block mb-1">Datum</label>
+                  <div className="text-gray-900 font-medium">
+                    {extractedData.documentMetadata.date}
+                  </div>
+                </div>
+              )}
+              {extractedData.documentMetadata.supplier && (
+                <div>
+                  <label className="text-sm font-medium text-blue-700 block mb-1">Leverantör</label>
+                  <div className="text-gray-900 font-medium">
+                    {extractedData.documentMetadata.supplier}
+                  </div>
+                </div>
+              )}
+              {extractedData.documentMetadata.address && (
+                <div>
+                  <label className="text-sm font-medium text-blue-700 block mb-1">Projektadress</label>
+                  <div className="text-gray-900 font-medium">
+                    {extractedData.documentMetadata.address}
+                  </div>
+                </div>
+              )}
+              {extractedData.documentMetadata.receiver && (
+                <div>
+                  <label className="text-sm font-medium text-blue-700 block mb-1">Mottagare</label>
+                  <div className="text-gray-900 font-medium">
+                    {extractedData.documentMetadata.receiver}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* DOCUMENT STATS */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
