@@ -151,11 +151,23 @@ async function createExcelForDocument(doc: any): Promise<Buffer> {
   // Add data rows from this document
   const lineItems = doc.extracted_data?.lineItems || [];
   
+  // Get document-level date as fallback
+  const documentDate = doc.extracted_data?.documentMetadata?.date 
+    ? getValue(doc.extracted_data.documentMetadata.date)
+    : null;
+  
+  console.log(`   Processing ${lineItems.length} line items`);
+  console.log(`   Document date fallback: ${documentDate || 'none'}`);
+  
   for (const item of lineItems) {
-    const cleanItem = cleanLineItem(item);
+    // Pass filename and document date as fallbacks
+    const cleanItem = cleanLineItem(item, doc.filename);
+    
+    // Use document date if item date is still empty
+    const finalDate = cleanItem.date || documentDate || new Date().toISOString().split('T')[0];
     
     worksheet.addRow({
-      date: cleanItem.date || "",
+      date: finalDate,  // ✅ Will NEVER be empty now!
       location: cleanItem.location || "",
       material: cleanItem.material || "",
       weightKg: cleanItem.weightKg || 0,
@@ -329,6 +341,9 @@ export async function POST(request: NextRequest) {
     console.log(`   Total rows: ${totalRows}`);
     console.log(`   Total weight: ${(totalWeight / 1000).toFixed(2)} ton`);
     
+    // Get first successful filename for display
+    const firstSuccessful = results.find(r => r.success);
+    
     return NextResponse.json({
       success: true,
       message: `Exported ${successCount} documents`,
@@ -339,6 +354,10 @@ export async function POST(request: NextRequest) {
         rows: totalRows,
         totalWeightKg: totalWeight,
         totalWeightTon: totalWeight / 1000,
+        // Add display-friendly fields
+        displayFilename: successCount === 1 
+          ? firstSuccessful?.filename 
+          : `${successCount} filer`,
       },
       files: results,
     });

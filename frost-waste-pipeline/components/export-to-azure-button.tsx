@@ -55,6 +55,42 @@ export function ExportToAzureButton({
     window.location.reload();
   };
 
+  // Helper to get the display filename
+  const getDisplayFilename = () => {
+    if (!exportResult) return "N/A";
+    
+    // Check for displayFilename from stats
+    if (exportResult.stats?.displayFilename) {
+      return exportResult.stats.displayFilename;
+    }
+    
+    // Fallback: check files array
+    if (exportResult.files && exportResult.files.length > 0) {
+      if (exportResult.files.length === 1) {
+        return exportResult.files[0].filename;
+      }
+      return `${exportResult.files.length} filer`;
+    }
+    
+    return "N/A";
+  };
+
+  // Helper to get the first Azure URL
+  const getAzureUrl = () => {
+    if (!exportResult) return null;
+    
+    // Check direct azureUrl
+    if (exportResult.azureUrl) return exportResult.azureUrl;
+    
+    // Check files array
+    if (exportResult.files && exportResult.files.length > 0) {
+      const firstSuccess = exportResult.files.find((f: any) => f.success && f.url);
+      return firstSuccess?.url || null;
+    }
+    
+    return null;
+  };
+
   return (
     <>
       <button
@@ -120,7 +156,7 @@ export function ExportToAzureButton({
                     Dokument
                   </div>
                   <p className="text-2xl font-bold text-gray-900">
-                    {exportResult.stats?.documents || 0}
+                    {exportResult.stats?.success || exportResult.stats?.total || 0}
                   </p>
                 </div>
 
@@ -138,7 +174,7 @@ export function ExportToAzureButton({
                     Total vikt
                   </div>
                   <p className="text-2xl font-bold text-gray-900">
-                    {exportResult.stats?.totalWeightTon || "0"} ton
+                    {exportResult.stats?.totalWeightTon?.toFixed(2) || "0"} ton
                   </p>
                 </div>
 
@@ -146,26 +182,26 @@ export function ExportToAzureButton({
                   <div className="text-xs font-medium text-gray-600 uppercase mb-1">
                     Filnamn
                   </div>
-                  <p className="text-sm font-medium text-gray-900 truncate" title={exportResult.stats?.filename}>
-                    {exportResult.stats?.filename || "N/A"}
+                  <p className="text-sm font-medium text-gray-900 truncate" title={getDisplayFilename()}>
+                    {getDisplayFilename()}
                   </p>
                 </div>
               </div>
 
               {/* Azure Link */}
-              {exportResult.azureUrl && (
+              {getAzureUrl() && (
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
                   <div className="flex items-center justify-between">
-                    <div>
+                    <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium text-blue-900 mb-1">
                         Filen finns i Azure
                       </p>
-                      <p className="text-xs text-blue-700 break-all">
-                        {exportResult.azureUrl}
+                      <p className="text-xs text-blue-700 truncate">
+                        {getAzureUrl()}
                       </p>
                     </div>
                     <a
-                      href={exportResult.azureUrl}
+                      href={getAzureUrl()!}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="ml-4 flex-shrink-0 p-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
@@ -174,6 +210,29 @@ export function ExportToAzureButton({
                       <ExternalLink className="w-4 h-4" />
                     </a>
                   </div>
+                </div>
+              )}
+
+              {/* Show exported files list if multiple */}
+              {exportResult.files && exportResult.files.length > 1 && (
+                <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-4 max-h-40 overflow-y-auto">
+                  <p className="text-xs font-medium text-gray-600 uppercase mb-2">
+                    Exporterade filer
+                  </p>
+                  <ul className="space-y-1">
+                    {exportResult.files.map((file: any, idx: number) => (
+                      <li key={idx} className="flex items-center justify-between text-sm">
+                        <span className={`truncate ${file.success ? 'text-gray-900' : 'text-red-600'}`}>
+                          {file.success ? '✓' : '✗'} {file.filename}
+                        </span>
+                        {file.success && file.rows && (
+                          <span className="text-gray-500 ml-2 flex-shrink-0">
+                            {file.rows} rader
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               )}
 
@@ -200,4 +259,3 @@ export function ExportToAzureButton({
     </>
   );
 }
-

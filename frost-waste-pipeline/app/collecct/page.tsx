@@ -1,10 +1,17 @@
 import { createServiceRoleClient } from "@/lib/supabase";
 import Link from "next/link";
-import { FileText, CheckCircle2, AlertCircle, Activity, RefreshCw, ArrowLeft, Download, Settings } from "lucide-react";
+import { FileText, CheckCircle2, AlertCircle, Activity, RefreshCw, ArrowLeft, Download, Settings, Home } from "lucide-react";
 import { AutoFetchButton } from "@/components/auto-fetch-button";
 import { BatchProcessButton } from "@/components/batch-process-button";
 import { GranskaButton } from "@/components/granska-button";
 import { ExportToAzureButton } from "@/components/export-to-azure-button";
+import { Breadcrumbs } from "@/components/breadcrumbs";
+import { getDashboardBreadcrumbs } from "@/lib/breadcrumb-utils";
+import { FilterSection } from "@/components/filter-section";
+import { UndoExportButton } from "@/components/undo-export-button";
+import { formatDate, formatDateTime } from "@/lib/time-utils";
+import { RelativeTime } from "@/components/relative-time";
+import { truncateFilename } from "@/lib/filename-utils";
 
 export const dynamic = "force-dynamic";
 
@@ -25,10 +32,8 @@ export default async function CollecctDashboard({
 
   // Filter: Active tab shows non-exported, Archive tab shows exported
   if (activeTab === "archive") {
-    // Archive: show exported documents
     documentsQuery = documentsQuery.not("exported_at", "is", null);
   } else {
-    // Active: show non-exported documents
     documentsQuery = documentsQuery.is("exported_at", null);
   }
 
@@ -66,10 +71,10 @@ export default async function CollecctDashboard({
     exported: exportedDocs.length,
   };
 
-  // Show documents based on active tab
+  // Show documents based on active tab (max 10 for cleaner look)
   const recentDocs = activeTab === "archive"
-    ? exportedDocs.slice(0, 50) // Show more in archive
-    : documents?.slice(0, 50) || [];
+    ? exportedDocs.slice(0, 10)
+    : documents?.filter(d => d.status !== 'needs_review').slice(0, 10) || [];
 
   // Calculate quality metrics
   const avgCompleteness = documents && documents.length > 0
@@ -84,6 +89,9 @@ export default async function CollecctDashboard({
       {/* Header - Clean and Professional */}
       <div className="bg-white border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-6 py-6">
+          {/* Breadcrumbs */}
+          <Breadcrumbs items={getDashboardBreadcrumbs()} className="mb-4" />
+          
           {/* Top Navigation Bar */}
           <div className="flex items-center justify-between mb-6">
             {/* Left: Back button */}
@@ -168,8 +176,8 @@ export default async function CollecctDashboard({
         </div>
       </div>
 
-        {/* Stats Cards */}
-        <div className="max-w-7xl mx-auto px-6 py-8">
+      {/* Stats Cards */}
+      <div className="max-w-7xl mx-auto px-6 py-8">
         {/* Batch Processing UI */}
         {uploadedDocs.length > 0 && (
           <BatchProcessButton uploadedDocs={uploadedDocs} />
@@ -238,6 +246,108 @@ export default async function CollecctDashboard({
           </div>
         </div>
 
+        {/* PRIORITY: Documents Needing Review - SHOW FIRST */}
+        {needsReviewDocs.length > 0 && activeTab === "active" && (
+          <div id="needs-review-section" className="mb-8">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                <span className="w-3 h-3 bg-yellow-500 rounded-full animate-pulse"></span>
+                Behöver granskning
+              </h2>
+              <p className="text-sm text-gray-500">
+                {needsReviewDocs.length} dokument väntar
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {needsReviewDocs.slice(0, 9).map((doc) => {
+                const validation = doc.extracted_data?._validation;
+                const completeness = validation?.completeness || 100;
+                const materialCount = doc.extracted_data?.lineItems?.length || doc.extracted_data?.rows?.length || 0;
+                const totalWeight = doc.extracted_data?.totalWeightKg || 
+                  (doc.extracted_data?.lineItems?.reduce((sum: number, item: any) => 
+                    sum + (item.weightKg || 0), 0) || 0);
+
+                return (
+                  <div
+                    key={doc.id}
+                    className="bg-white rounded-lg border-2 border-yellow-300 overflow-hidden hover:shadow-md transition-shadow"
+                  >
+                    <div className="p-5 border-b border-yellow-100 bg-yellow-50">
+                      <div className="flex items-start gap-3 mb-3">
+                        <div className="flex-shrink-0 w-10 h-10 bg-yellow-100 rounded-lg flex items-center justify-center">
+                          <FileText className="w-5 h-5 text-yellow-700" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <h3 
+                            className="font-medium text-gray-900 text-sm truncate mb-1"
+                            title={doc.filename}
+                          >
+                            {truncateFilename(doc.filename, 30)}
+                          </h3>
+                          <p className="text-xs text-gray-500" title={formatDate(doc.created_at)}>
+                            <RelativeTime date={doc.created_at} />
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="p-5 space-y-3">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-gray-600">Material:</span>
+                        <span className="font-medium text-gray-900">{materialCount} rader</span>
+                      </div>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-gray-600">Total vikt:</span>
+                        <span className="font-medium text-gray-900">
+                          {totalWeight > 0 ? `${(totalWeight / 1000).toFixed(1)} ton` : '0 kg'}
+                        </span>
+                      </div>
+                      
+                      <div>
+                        <div className="flex items-center justify-between text-xs mb-1">
+                          <span className="text-gray-600">Fullständighet:</span>
+                          <span className={`font-medium ${
+                            completeness >= 95 ? 'text-green-600' :
+                            completeness >= 80 ? 'text-yellow-600' :
+                            'text-red-600'
+                          }`}>
+                            {completeness.toFixed(0)}%
+                          </span>
+                        </div>
+                        <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full transition-all ${
+                              completeness >= 95 ? 'bg-green-500' :
+                              completeness >= 80 ? 'bg-yellow-500' :
+                              'bg-red-500'
+                            }`}
+                            style={{ width: `${Math.min(completeness, 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="p-5 pt-0">
+                      <Link
+                        href={`/review/${doc.id}`}
+                        className="block w-full py-2.5 px-4 bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium rounded-lg transition-colors text-center"
+                      >
+                        Granska nu
+                      </Link>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {needsReviewDocs.length > 9 && (
+              <p className="text-center text-sm text-gray-500 mt-4">
+                + {needsReviewDocs.length - 9} fler dokument som behöver granskning
+              </p>
+            )}
+          </div>
+        )}
+
         {/* Senaste Dokument Section */}
         <div className="mb-8">
           <div className="flex items-center justify-between mb-4">
@@ -271,28 +381,11 @@ export default async function CollecctDashboard({
               {recentDocs.map((doc) => {
                 const validation = doc.extracted_data?._validation;
                 const completeness = validation?.completeness || 100;
+                const isProcessed = doc.status !== 'uploaded';
                 const materialCount = doc.extracted_data?.lineItems?.length || doc.extracted_data?.rows?.length || 0;
-                // Calculate weight from lineItems if totalWeightKg is missing
                 const totalWeight = doc.extracted_data?.totalWeightKg || 
                   (doc.extracted_data?.lineItems?.reduce((sum: number, item: any) => 
                     sum + (item.weightKg || 0), 0) || 0);
-                
-                // Status color
-                let statusColor = "gray";
-                let statusText = "Laddat upp";
-                if (doc.status === "exported") {
-                  statusColor = "purple";
-                  statusText = "Exporterad";
-                } else if (doc.status === "needs_review") {
-                  statusColor = "yellow";
-                  statusText = "Väntar";
-                } else if (doc.status === "approved") {
-                  statusColor = "green";
-                  statusText = "Godkänd";
-                } else if (doc.status === "error") {
-                  statusColor = "red";
-                  statusText = "Fel";
-                }
 
                 return (
                   <div
@@ -307,18 +400,14 @@ export default async function CollecctDashboard({
                             <FileText className="w-5 h-5 text-gray-600" />
                           </div>
                           <div className="flex-1 min-w-0">
-                            <h3 className="font-medium text-gray-900 text-sm truncate mb-1">
-                              {doc.filename.length > 25 
-                                ? `${doc.filename.substring(0, 25)}...`
-                                : doc.filename
-                              }
+                            <h3 
+                              className="font-medium text-gray-900 text-sm truncate mb-1"
+                              title={doc.filename}
+                            >
+                              {truncateFilename(doc.filename, 30)}
                             </h3>
-                            <p className="text-xs text-gray-500">
-                              {new Date(doc.created_at).toLocaleDateString('sv-SE', {
-                                year: 'numeric',
-                                month: '2-digit',
-                                day: '2-digit'
-                              })}
+                            <p className="text-xs text-gray-500" title={formatDate(doc.created_at)}>
+                              <RelativeTime date={doc.created_at} />
                             </p>
                           </div>
                         </div>
@@ -346,12 +435,17 @@ export default async function CollecctDashboard({
                     <div className="p-5 space-y-3">
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-gray-600">Material:</span>
-                        <span className="font-medium text-gray-900">{materialCount} rader</span>
+                        <span className="font-medium text-gray-900">
+                          {isProcessed ? `${materialCount} rader` : 'Ej processad'}
+                        </span>
                       </div>
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-gray-600">Total vikt:</span>
                         <span className="font-medium text-gray-900">
-                          {totalWeight > 0 ? `${(totalWeight / 1000).toFixed(1)} ton` : '0 kg'}
+                          {isProcessed 
+                            ? (totalWeight > 0 ? `${(totalWeight / 1000).toFixed(1)} ton` : '0 kg')
+                            : '-'
+                          }
                         </span>
                       </div>
                       
@@ -360,21 +454,23 @@ export default async function CollecctDashboard({
                         <div className="flex items-center justify-between text-xs mb-1">
                           <span className="text-gray-600">Fullständighet:</span>
                           <span className={`font-medium ${
+                            !isProcessed ? 'text-gray-400' :
                             completeness >= 95 ? 'text-green-600' :
                             completeness >= 80 ? 'text-yellow-600' :
                             'text-red-600'
                           }`}>
-                            {completeness.toFixed(0)}%
+                            {isProcessed ? `${completeness.toFixed(0)}%` : '-'}
                           </span>
                         </div>
                         <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
                           <div
                             className={`h-full transition-all ${
+                              !isProcessed ? 'bg-gray-300' :
                               completeness >= 95 ? 'bg-green-500' :
                               completeness >= 80 ? 'bg-yellow-500' :
                               'bg-red-500'
                             }`}
-                            style={{ width: `${completeness}%` }}
+                            style={{ width: isProcessed ? `${completeness}%` : '0%' }}
                           />
                         </div>
                       </div>
@@ -434,27 +530,28 @@ export default async function CollecctDashboard({
                           <div className="px-4 py-2 bg-purple-50 border border-purple-200 rounded-lg text-center">
                             <p className="text-xs text-purple-700 font-medium">📤 Exporterad</p>
                             {doc.exported_at && (
-                              <p className="text-xs text-purple-600 mt-1">
-                                {new Date(doc.exported_at).toLocaleDateString('sv-SE', {
-                                  year: 'numeric',
-                                  month: '2-digit',
-                                  day: '2-digit',
-                                  hour: '2-digit',
-                                  minute: '2-digit'
-                                })}
+                              <p className="text-xs text-purple-600 mt-1" title={formatDateTime(doc.exported_at)}>
+                                <RelativeTime date={doc.exported_at} />
                               </p>
                             )}
                           </div>
-                          {doc.extracted_data?.azure_export_url && (
-                            <a
-                              href={doc.extracted_data.azure_export_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="block w-full py-2 px-4 bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium rounded-lg transition-colors text-center"
-                            >
-                              Öppna i Azure
-                            </a>
-                          )}
+                          <div className="flex gap-2">
+                            {doc.extracted_data?.azure_export_url && (
+                              <a
+                                href={doc.extracted_data.azure_export_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex-1 py-2 px-4 bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium rounded-lg transition-colors text-center"
+                              >
+                                Öppna i Azure
+                              </a>
+                            )}
+                            <UndoExportButton 
+                              documentId={doc.id} 
+                              filename={doc.filename}
+                              variant="icon"
+                            />
+                          </div>
                         </div>
                       )}
                       {doc.status === 'error' && (
@@ -472,137 +569,6 @@ export default async function CollecctDashboard({
             </div>
           )}
         </div>
-
-        {/* All Documents Needing Review */}
-        {needsReviewDocs.length > 0 && (
-          <div id="needs-review-section" className="scroll-mt-8">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold text-gray-900">
-                Behöver granskning
-              </h2>
-              <p className="text-sm text-gray-500">
-                {needsReviewDocs.length} dokument väntar
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {needsReviewDocs.map((doc) => {
-                const validation = doc.extracted_data?._validation;
-                const completeness = validation?.completeness || 100;
-                const materialCount = doc.extracted_data?.lineItems?.length || doc.extracted_data?.rows?.length || 0;
-                // Calculate weight from lineItems if totalWeightKg is missing
-                const totalWeight = doc.extracted_data?.totalWeightKg || 
-                  (doc.extracted_data?.lineItems?.reduce((sum: number, item: any) => 
-                    sum + (item.weightKg || 0), 0) || 0);
-
-                return (
-                  <div
-                    key={doc.id}
-                    className="bg-white rounded-lg border border-gray-200 overflow-hidden hover:shadow-md transition-shadow"
-                  >
-                    <div className="p-5 border-b border-gray-100">
-                      <div className="flex items-start gap-3 mb-3">
-                        <div className="flex-shrink-0 w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
-                          <FileText className="w-5 h-5 text-gray-600" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <h3 className="font-medium text-gray-900 text-sm truncate mb-1">
-                            {doc.filename.length > 25 
-                              ? `${doc.filename.substring(0, 25)}...`
-                              : doc.filename
-                            }
-                          </h3>
-                          <p className="text-xs text-gray-500">
-                            {new Date(doc.created_at).toLocaleDateString('sv-SE', {
-                              year: 'numeric',
-                              month: '2-digit',
-                              day: '2-digit'
-                            })}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="p-5 space-y-3">
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-600">Material:</span>
-                        <span className="font-medium text-gray-900">{materialCount} rader</span>
-                      </div>
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-600">Total vikt:</span>
-                        <span className="font-medium text-gray-900">
-                          {totalWeight > 0 ? `${(totalWeight / 1000).toFixed(1)} ton` : '0 kg'}
-                        </span>
-                      </div>
-                      
-                      <div>
-                        <div className="flex items-center justify-between text-xs mb-1">
-                          <span className="text-gray-600">Fullständighet:</span>
-                          <span className={`font-medium ${
-                            completeness >= 95 ? 'text-green-600' :
-                            completeness >= 80 ? 'text-yellow-600' :
-                            'text-red-600'
-                          }`}>
-                            {completeness.toFixed(0)}%
-                          </span>
-                        </div>
-                        <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full transition-all ${
-                              completeness >= 95 ? 'bg-green-500' :
-                              completeness >= 80 ? 'bg-yellow-500' :
-                              'bg-red-500'
-                            }`}
-                            style={{ width: `${completeness}%` }}
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="p-5 pt-0">
-                      {doc.status === 'uploaded' && (
-                        <GranskaButton documentId={doc.id} />
-                      )}
-                      {doc.status === 'processing' && (
-                        <div className="px-4 py-2 bg-gray-100 text-gray-600 rounded-lg font-medium flex items-center justify-center gap-2">
-                          <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                          </svg>
-                          Behandlar...
-                        </div>
-                      )}
-                      {doc.status === 'needs_review' && (
-                        <Link
-                          href={`/review/${doc.id}`}
-                          className="block w-full py-2.5 px-4 bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium rounded-lg transition-colors text-center"
-                        >
-                          Granska nu
-                        </Link>
-                      )}
-                      {doc.status === 'approved' && (
-                        <Link
-                          href={`/review/${doc.id}`}
-                          className="block w-full py-2.5 px-4 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors text-center"
-                        >
-                          Se detaljer
-                        </Link>
-                      )}
-                      {doc.status === 'error' && (
-                        <Link
-                          href={`/review/${doc.id}`}
-                          className="block w-full py-2.5 px-4 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors text-center"
-                        >
-                          Visa fel
-                        </Link>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );

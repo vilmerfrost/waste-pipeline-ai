@@ -1,17 +1,22 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { SmartInput } from "@/components/smart-input";
 import { saveDocument } from "@/app/actions";
-import { ArrowRight, Save, Skull, Plus, Trash2 } from "lucide-react";
+import { ArrowRight, Save, Skull, Plus, Trash2, AlertTriangle } from "lucide-react";
+import { useUnsavedChanges } from "@/hooks/use-unsaved-changes";
 
 export function ReviewForm({
   initialData,
   documentId,
+  nextDocId,
 }: {
   initialData?: any;
   documentId: string;
+  nextDocId?: string;
 }) {
+  const router = useRouter();
   const data = initialData || {};
 
   // State for editable document-level metadata (pre-filled from AI extraction)
@@ -23,6 +28,9 @@ export function ReviewForm({
   // Success toast state
   const [showSuccess, setShowSuccess] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  
+  // Track if form has been modified
+  const [hasBeenModified, setHasBeenModified] = useState(false);
 
   // Pre-fill metadata from AI extraction when component loads
   useEffect(() => {
@@ -76,7 +84,7 @@ export function ReviewForm({
       unit: normalizeValue(item.unit || "Kg"),
     }));
   };
-
+  
   // State för rader så vi kan loopa och räkna
   const [lineItems, setLineItems] = useState(() => {
     const items = data.lineItems || [];
@@ -90,6 +98,11 @@ export function ReviewForm({
          (typeof data.co2Saved === 'object' ? data.co2Saved?.value : data.co2Saved) || 0,
   });
 
+  // Unsaved changes warning
+  const { safeNavigate } = useUnsavedChanges({
+    hasUnsavedChanges: hasBeenModified,
+    message: "Du har osparade ändringar. Är du säker på att du vill lämna sidan?",
+  });
 
   // LIVE-RÄKNARE 🧮
   useEffect(() => {
@@ -126,6 +139,7 @@ export function ReviewForm({
 
   // Funktion för att uppdatera en rad när man skriver
   const updateLineItem = (index: number, field: string, value: any) => {
+    setHasBeenModified(true);
     const newItems = [...lineItems];
     
     // Ensure field exists and is in wrapped format
@@ -139,7 +153,7 @@ export function ReviewForm({
     }
     
     // Update the value
-    newItems[index][field].value = value;
+        newItems[index][field].value = value;
     
     // If updating address, also update location (and vice versa)
     if (field === "address") {
@@ -166,12 +180,14 @@ export function ReviewForm({
 
   // Ta bort rad
   const removeLineItem = (index: number) => {
+    setHasBeenModified(true);
     const newItems = lineItems.filter((_: any, i: number) => i !== index);
     setLineItems(newItems);
   };
 
   // Lägg till ny rad
   const addLineItem = () => {
+    setHasBeenModified(true);
     const newItem = {
       material: { value: "", confidence: 1 },
       weightKg: { value: 0, confidence: 1 },
@@ -205,7 +221,7 @@ export function ReviewForm({
   });
 
   // Handle form submission
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>, goToNext: boolean = false) => {
     e.preventDefault();
     setIsSaving(true);
     
@@ -262,9 +278,20 @@ export function ReviewForm({
       
       await saveDocument(formData);
       
+      // Mark as clean after successful save
+      setHasBeenModified(false);
+      
       // Show success toast
       setShowSuccess(true);
       setTimeout(() => setShowSuccess(false), 3000);
+      
+      // Navigate to next document if requested
+      if (goToNext && nextDocId) {
+        router.push(`/review/${nextDocId}`);
+      } else if (goToNext && !nextDocId) {
+        // No more documents to review, go back to dashboard
+        router.push('/collecct');
+      }
       
     } catch (error) {
       console.error("Save error:", error);
@@ -273,9 +300,33 @@ export function ReviewForm({
     }
   };
 
+  // Handle metadata field changes
+  const handleMetadataChange = (setter: (val: string) => void, value: string) => {
+    setHasBeenModified(true);
+    setter(value);
+  };
+
   return (
-    <form onSubmit={handleSubmit} className="bg-white rounded-lg shadow p-6 space-y-6">
+    <form onSubmit={(e) => handleSubmit(e, false)} className="bg-white rounded-lg shadow p-6 space-y-6">
       <input type="hidden" name="id" value={documentId} />
+      
+      {/* UNSAVED CHANGES INDICATOR */}
+      {hasBeenModified && (
+        <div className="flex items-center gap-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+          <AlertTriangle className="w-4 h-4 text-yellow-600" />
+          <span className="text-sm text-yellow-700">Osparade ändringar</span>
+        </div>
+      )}
+      
+      {/* SUCCESS TOAST */}
+      {showSuccess && (
+        <div className="fixed bottom-4 right-4 z-50 bg-green-500 text-white px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 animate-in slide-in-from-bottom-5">
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+          </svg>
+          <span>Sparat!</span>
+        </div>
+      )}
       
       {/* GRUNDLÄGGANDE INFORMATION */}
       <div>
@@ -302,7 +353,7 @@ export function ReviewForm({
               type="date"
               name="date"
               value={documentDate}
-              onChange={(e) => setDocumentDate(e.target.value)}
+              onChange={(e) => handleMetadataChange(setDocumentDate, e.target.value)}
               className="w-full p-3 bg-white border border-slate-200 rounded-xl outline-none transition-all shadow-sm focus:ring-blue-100 focus:border-blue-400"
             />
           </div>
@@ -316,7 +367,7 @@ export function ReviewForm({
               type="text"
               name="supplier"
               value={documentSupplier}
-              onChange={(e) => setDocumentSupplier(e.target.value)}
+              onChange={(e) => handleMetadataChange(setDocumentSupplier, e.target.value)}
               placeholder="t.ex. Stefan Hallberg"
               className="w-full p-3 bg-white border border-slate-200 rounded-xl outline-none transition-all shadow-sm focus:ring-blue-100 focus:border-blue-400"
             />
@@ -366,7 +417,7 @@ export function ReviewForm({
               type="text"
               name="address"
               value={projectAddress}
-              onChange={(e) => setProjectAddress(e.target.value)}
+              onChange={(e) => handleMetadataChange(setProjectAddress, e.target.value)}
               placeholder="t.ex. Östergårds Förskola"
               className="w-full p-3 bg-white border border-slate-200 rounded-xl outline-none transition-all shadow-sm focus:ring-blue-100 focus:border-blue-400"
             />
@@ -381,7 +432,7 @@ export function ReviewForm({
               type="text"
               name="receiver"
               value={mainReceiver}
-              onChange={(e) => setMainReceiver(e.target.value)}
+              onChange={(e) => handleMetadataChange(setMainReceiver, e.target.value)}
               placeholder="t.ex. Renova"
               className="w-full p-3 bg-white border border-slate-200 rounded-xl outline-none transition-all shadow-sm focus:ring-blue-100 focus:border-blue-400"
             />
@@ -395,14 +446,14 @@ export function ReviewForm({
           <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">
             Specifikation - Material ({lineItems.length} rader)
           </h3>
-          <button
-            type="button"
+                            <button 
+                                type="button"
             onClick={addLineItem}
             className="flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
-          >
+                            >
             <Plus className="w-4 h-4" />
             Lägg till rad
-          </button>
+                            </button>
         </div>
 
         {lineItems.length === 0 ? (
@@ -489,8 +540,8 @@ export function ReviewForm({
                           missingWeight ? 'border-red-500 bg-red-50' : 'border-gray-300'
                         }`}
                       />
-                    </td>
-                    {hasHandling && (
+                        </td>
+                     {hasHandling && (
                       <td className="py-2 px-2">
                         <SmartInput
                           label=""
@@ -502,10 +553,10 @@ export function ReviewForm({
                           }
                           className="text-sm border-0 shadow-none focus:ring-0 p-1"
                         />
-                      </td>
+                        </td>
                     )}
                     <td className="py-2 px-2">
-                      <SmartInput
+                        <SmartInput 
                         label=""
                         name={`lineItems[${index}].co2Saved`}
                         type="number"
@@ -581,28 +632,43 @@ export function ReviewForm({
                   </tr>
                   );
                 })}
-              </tbody>
-            </table>
+            </tbody>
+          </table>
           </div>
         )}
-      </div>
+        </div>
 
       {/* ACTIONS */}
       <div className="flex justify-end gap-4 pt-6 border-t">
-        <button
-          type="submit"
-          className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors"
+            <button
+                type="submit"
+          disabled={isSaving}
+          className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors disabled:opacity-50"
         >
-          <Save className="w-4 h-4" />
+          {isSaving ? (
+            <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+            </svg>
+          ) : (
+                <Save className="w-4 h-4" />
+          )}
           Spara
         </button>
         <button
-          type="submit"
-          className="flex items-center gap-2 px-6 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
+          type="button"
+          onClick={(e) => {
+            const form = e.currentTarget.closest('form');
+            if (form) {
+              handleSubmit({ preventDefault: () => {}, currentTarget: form } as any, true);
+            }
+          }}
+          disabled={isSaving}
+          className="flex items-center gap-2 px-6 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors disabled:opacity-50"
         >
-          Spara & Nästa
+          {isSaving ? 'Sparar...' : 'Spara & Nästa'}
           <ArrowRight className="w-4 h-4" />
-        </button>
+            </button>
       </div>
     </form>
   );

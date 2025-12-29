@@ -14,6 +14,9 @@ import { ReverifyButton } from "@/components/reverify-button";
 import { ExcelViewer } from "@/components/excel-viewer";
 import { ReviewForm } from "@/components/review-form";
 import { PaginatedTable } from "@/components/paginated-table";
+import { Breadcrumbs } from "@/components/breadcrumbs";
+import { getReviewBreadcrumbs } from "@/lib/breadcrumb-utils";
+import { truncateFilename } from "@/lib/filename-utils";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +36,17 @@ export default async function ReviewPage({
     .single();
 
   if (!doc) notFound();
+
+  // Fetch next document needing review (for "Nästa" button)
+  const { data: nextDocs } = await supabase
+    .from("documents")
+    .select("id")
+    .eq("status", "needs_review")
+    .neq("id", id)
+    .order("created_at", { ascending: true })
+    .limit(1);
+  
+  const nextDocId = nextDocs?.[0]?.id;
 
   // Get signed URL for file preview
   const { data } = await supabase.storage
@@ -215,6 +229,12 @@ export default async function ReviewPage({
       {/* Header */}
       <div className="bg-white border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-6 py-6">
+          {/* Breadcrumbs */}
+          <Breadcrumbs 
+            items={getReviewBreadcrumbs(doc.id, doc.filename)} 
+            className="mb-4" 
+          />
+          
           <div className="flex items-center justify-between mb-4">
             <Link
               href="/collecct"
@@ -223,18 +243,42 @@ export default async function ReviewPage({
               <ArrowLeft className="w-4 h-4" />
               <span>Tillbaka</span>
             </Link>
-            <ReverifyButton docId={doc.id} />
+            <div className="flex items-center gap-3">
+              <ReverifyButton docId={doc.id} />
+              {nextDocId && (
+                <Link
+                  href={`/review/${nextDocId}`}
+                  className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-lg transition-colors"
+                >
+                  <span>Nästa dokument</span>
+                  <ArrowRight className="w-4 h-4" />
+                </Link>
+              )}
+            </div>
           </div>
 
           <div className="flex items-center gap-2 mb-4">
-            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-            <span className="text-xs font-medium text-green-600 uppercase tracking-wider">
-              SYSTEM ONLINE
+            <div className={`w-2 h-2 rounded-full animate-pulse ${
+              doc.status === 'approved' ? 'bg-green-500' :
+              doc.status === 'needs_review' ? 'bg-yellow-500' :
+              doc.status === 'error' ? 'bg-red-500' :
+              'bg-blue-500'
+            }`} />
+            <span className={`text-xs font-medium uppercase tracking-wider ${
+              doc.status === 'approved' ? 'text-green-600' :
+              doc.status === 'needs_review' ? 'text-yellow-600' :
+              doc.status === 'error' ? 'text-red-600' :
+              'text-blue-600'
+            }`}>
+              {doc.status === 'approved' ? 'GODKÄND' :
+               doc.status === 'needs_review' ? 'BEHÖVER GRANSKNING' :
+               doc.status === 'error' ? 'FEL' :
+               doc.status.toUpperCase()}
             </span>
           </div>
 
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">
-            {doc.filename}
+          <h1 className="text-3xl font-bold text-gray-900 mb-2" title={doc.filename}>
+            {truncateFilename(doc.filename, 60)}
           </h1>
           <p className="text-sm text-gray-600">
             Granska och godkänn dokument för Collecct AB.
@@ -447,6 +491,7 @@ export default async function ReviewPage({
             <ReviewForm
               initialData={extractedData}
               documentId={doc.id}
+              nextDocId={nextDocId}
             />
           </div>
         </div>
