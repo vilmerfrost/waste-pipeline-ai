@@ -475,23 +475,28 @@ export default function SettingsPage() {
                   </button>
                 </div>
 
-                {/* Auto-Godkännande (Enterprise) */}
+                {/* Auto-Godkännande */}
                 <div className="bg-white rounded-lg border border-gray-200 p-6">
-                  <div className="flex items-center justify-between mb-4">
-                    <h2 className="text-xl font-bold text-gray-900">
+                  <div className="mb-4">
+                    <h2 className="text-xl font-bold text-gray-900 mb-2">
                       Auto-Godkännande
                     </h2>
-                    <span className="px-3 py-1 bg-purple-100 text-purple-700 text-xs font-semibold rounded-full">
-                      ENTERPRISE
-                    </span>
+                    <p className="text-sm text-gray-600">
+                      Dokumentprocessen godkänner automatiskt dokument med kvalitetsbetyg över 95%. Dokument under tröskeln skickas till mänsklig granskning.
+                    </p>
                   </div>
-                  <p className="text-sm text-gray-600 mb-4">
-                    Hoppa över granskning helt för dokument med 100% säkerhet.
-                  </p>
                   
-                  <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg text-center">
-                    <p className="text-sm text-gray-500">
-                      Kontakta support för att aktivera denna funktion
+                  <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+                    <div className="flex items-center gap-2 text-green-700">
+                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                      <p className="text-sm font-medium">
+                        Automatisk godkännande aktivt
+                      </p>
+                    </div>
+                    <p className="text-xs text-green-600 mt-2">
+                      Dokument med 95%+ kvalitet godkänns automatiskt och exporteras till Azure
                     </p>
                   </div>
                 </div>
@@ -508,8 +513,56 @@ export default function SettingsPage() {
                   Hantera exportformat och rapportinställningar.
                 </p>
                 
-                <div className="p-12 text-center text-gray-400">
-                  Kommer snart...
+                <div className="space-y-6">
+                  {/* Export Format */}
+                  <div>
+                    <h3 className="font-semibold text-gray-900 mb-3">Exportformat</h3>
+                    <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-medium text-gray-900">Excel (XLSX)</p>
+                          <p className="text-sm text-gray-600">Standard exportformat för Simplitics</p>
+                        </div>
+                        <span className="px-3 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded-full">
+                          AKTIVT
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Export Location */}
+                  <div>
+                    <h3 className="font-semibold text-gray-900 mb-3">Exportdestination</h3>
+                    <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-medium text-gray-900">Azure Blob Storage</p>
+                          <p className="text-sm text-gray-600 font-mono">Container: completed</p>
+                        </div>
+                        <span className="px-3 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded-full">
+                          ANSLUTEN
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Auto-export */}
+                  <div>
+                    <h3 className="font-semibold text-gray-900 mb-3">Automatisk export</h3>
+                    <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+                      <div className="flex items-center gap-2 text-green-700">
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                        <p className="text-sm font-medium">
+                          Godkända dokument exporteras automatiskt
+                        </p>
+                      </div>
+                      <p className="text-xs text-green-600 mt-2">
+                        Efter godkännande raderas originalfilen från "unsupported-file-format"
+                      </p>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
@@ -524,8 +577,63 @@ export default function SettingsPage() {
                   Hantera Azure-integration och GUID-inställningar.
                 </p>
                 
-                <div className="p-12 text-center text-gray-400">
-                  Kommer snart...
+                <div className="space-y-6">
+                  {/* Azure Connection Status */}
+                  <div>
+                    <h3 className="font-semibold text-gray-900 mb-3">Azure Blob Storage</h3>
+                    <div className="space-y-3">
+                      <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="font-medium text-gray-900">Input Container</p>
+                          <span className="px-3 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded-full">
+                            ANSLUTEN
+                          </span>
+                        </div>
+                        <p className="text-sm text-gray-600 font-mono">unsupported-file-format</p>
+                      </div>
+                      
+                      <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="font-medium text-gray-900">Output Container</p>
+                          <span className="px-3 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded-full">
+                            ANSLUTEN
+                          </span>
+                        </div>
+                        <p className="text-sm text-gray-600 font-mono">completed</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Auto-sync */}
+                  <div>
+                    <h3 className="font-semibold text-gray-900 mb-3">Automatisk synkronisering</h3>
+                    <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+                      <div className="flex items-center gap-2 text-green-700">
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                        <p className="text-sm font-medium">
+                          Synkar nya filer var 5:e minut
+                        </p>
+                      </div>
+                      <p className="text-xs text-green-600 mt-2">
+                        Systemet kollar automatiskt efter nya dokument i "unsupported-file-format"
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Filename Format */}
+                  <div>
+                    <h3 className="font-semibold text-gray-900 mb-3">Filnamnhantering</h3>
+                    <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                      <p className="text-sm text-gray-600 mb-2">
+                        Systemet hanterar automatiskt UUID-baserade filnamn från Azure och extraherar datum från filnamn.
+                      </p>
+                      <p className="text-xs text-gray-500 font-mono">
+                        Format: [uuid]_[timestamp]_[datum].pdf
+                      </p>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}

@@ -1,4 +1,5 @@
-import { CheckCircle, XCircle } from "lucide-react";
+import { CheckCircle, XCircle, ArrowLeft } from "lucide-react";
+import Link from "next/link";
 
 export const dynamic = "force-dynamic";
 
@@ -22,11 +23,21 @@ export default async function HealthDashboard() {
       <div className="bg-white border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
           <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-semibold text-gray-900">System Health</h1>
-              <p className="mt-1 text-sm text-gray-500">
-                Last updated: {new Date(health.timestamp).toLocaleString('sv-SE')}
-              </p>
+            <div className="flex items-center gap-4">
+              <Link
+                href="/collecct"
+                className="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors"
+              >
+                <ArrowLeft className="w-5 h-5" />
+                <span className="font-medium">Tillbaka</span>
+              </Link>
+              <div className="h-6 w-px bg-gray-300" />
+              <div>
+                <h1 className="text-2xl font-semibold text-gray-900">System Health</h1>
+                <p className="mt-1 text-sm text-gray-500">
+                  Last updated: {new Date(health.timestamp).toLocaleString('sv-SE')}
+                </p>
+              </div>
             </div>
             <div className={`px-4 py-2 rounded-full text-sm font-medium ${
               health.status === "healthy" 
