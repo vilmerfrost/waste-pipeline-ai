@@ -104,14 +104,14 @@ export default async function HealthDashboard() {
 
             <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
               <div className="text-3xl font-bold text-green-600">
-                {health.stats.successRate}%
+                {health.stats.successRate}
               </div>
               <div className="text-sm text-gray-600 mt-1">Success Rate</div>
             </div>
 
             <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
               <div className="text-3xl font-bold text-blue-600">
-                {health.stats.avgQuality}%
+                {health.stats.avgQuality}
               </div>
               <div className="text-sm text-gray-600 mt-1">Avg Quality</div>
             </div>
@@ -229,4 +229,3 @@ function StatusBar({
     </div>
   );
 }
-

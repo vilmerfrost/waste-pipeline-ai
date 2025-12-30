@@ -33,7 +33,7 @@ export async function GET() {
       azureStatus = "error";
     }
 
-    // 3. Get processing stats
+    // 3. Get processing stats (last 24 hours)
     const { data: documents } = await supabase
       .from("documents")
       .select("status, created_at, extracted_data")
@@ -48,7 +48,7 @@ export async function GET() {
       error: documents?.filter(d => d.status === "error").length || 0,
     };
 
-    // 4. Calculate success rate
+    // 4. Calculate success rate (approved + needs_review = successfully processed)
     const processedDocs = documents?.filter(d => 
       d.status === "needs_review" || d.status === "approved"
     ) || [];
@@ -66,17 +66,42 @@ export async function GET() {
       ? (qualityScores.reduce((a, b) => a + b, 0) / qualityScores.length).toFixed(1)
       : "0";
 
-    // 6. Get processing jobs status
-    const { data: jobs } = await supabase
-      .from("processing_jobs")
-      .select("status")
-      .gte("created_at", new Date(Date.now() - 60 * 60 * 1000).toISOString());
+    // 6. Get processing jobs status (last hour)
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    
+    // Get uploaded docs in last hour (queued for processing)
+    const { data: queuedDocs } = await supabase
+      .from("documents")
+      .select("id")
+      .eq("status", "uploaded")
+      .gte("created_at", oneHourAgo);
+    
+    // Get currently processing docs
+    const { data: processingDocs } = await supabase
+      .from("documents")
+      .select("id")
+      .eq("status", "processing")
+      .gte("created_at", oneHourAgo);
+    
+    // Get succeeded docs (approved or needs_review in last hour)
+    const { data: succeededDocs } = await supabase
+      .from("documents")
+      .select("id")
+      .in("status", ["approved", "needs_review"])
+      .gte("created_at", oneHourAgo);
+    
+    // Get failed docs in last hour
+    const { data: failedDocs } = await supabase
+      .from("documents")
+      .select("id")
+      .eq("status", "error")
+      .gte("created_at", oneHourAgo);
 
     const jobStats = {
-      queued: jobs?.filter(j => j.status === "queued").length || 0,
-      processing: jobs?.filter(j => j.status === "processing").length || 0,
-      succeeded: jobs?.filter(j => j.status === "succeeded").length || 0,
-      failed: jobs?.filter(j => j.status === "failed").length || 0,
+      queued: queuedDocs?.length || 0,
+      processing: processingDocs?.length || 0,
+      succeeded: succeededDocs?.length || 0,
+      failed: failedDocs?.length || 0,
     };
 
     // 7. Response time
@@ -101,8 +126,8 @@ export async function GET() {
       },
       stats: {
         last24Hours: stats,
-        successRate: `${successRate}%`,
-        avgQuality: `${avgQuality}%`,
+        successRate: `${successRate}%`, // Keep the % here for display
+        avgQuality: `${avgQuality}%`,   // Keep the % here for display
       },
       jobs: jobStats,
     });
@@ -117,4 +142,3 @@ export async function GET() {
     );
   }
 }
-
