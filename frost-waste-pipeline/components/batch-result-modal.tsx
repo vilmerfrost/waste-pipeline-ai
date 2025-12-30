@@ -161,7 +161,7 @@ export function BatchResultModal({ isOpen, onClose, results }: BatchResultModalP
                         </span>
                         {doc.confidence && (
                           <span className="text-xs text-gray-500">
-                            Tillförlitlighet: {Math.round(doc.confidence * 100)}%
+                            Tillförlitlighet: {Math.round(doc.confidence)}%
                           </span>
                         )}
                       </div>

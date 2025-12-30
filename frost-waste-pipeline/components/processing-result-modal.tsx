@@ -141,11 +141,8 @@ export function ProcessingResultModal({ isOpen, onClose, result }: ProcessingRes
                     <span className="text-xs font-medium text-gray-600 uppercase">Tillförl.</span>
                   </div>
                   <p className="text-2xl font-bold text-gray-900">
-                    {/* Confidence is already a percentage (0-100), not a decimal (0-1) */}
-                    {result.confidence > 1 
-                      ? Math.round(result.confidence).toFixed(0)
-                      : Math.round(result.confidence * 100).toFixed(0)
-                    }%
+                    {/* Confidence is stored as 0-100 percentage */}
+                    {Math.round(result.confidence).toFixed(0)}%
                   </p>
                 </div>
               )}
