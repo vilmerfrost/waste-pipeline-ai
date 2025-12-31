@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
-import { Inter, Playfair_Display } from "next/font/google"; // <-- Importera Playfair
+import { Inter, Playfair_Display } from "next/font/google";
 import "./globals.css";
+import { ToastProvider } from "@/components/toast";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 const playfair = Playfair_Display({ 
   subsets: ["latin"], 
-  variable: "--font-playfair" // <-- Variabel för rubriker
+  variable: "--font-playfair"
 });
 
 export const metadata: Metadata = {
@@ -20,9 +21,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="sv">
-      {/* Lägg till båda variablerna här */}
       <body className={`${inter.variable} ${playfair.variable} font-sans antialiased bg-white text-slate-900`}>
-        {children}
+        <ToastProvider>
+          {children}
+        </ToastProvider>
       </body>
     </html>
   );

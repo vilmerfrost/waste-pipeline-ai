@@ -7,11 +7,10 @@ import { ExportActions } from "@/components/export-actions";
 import { SearchBar } from "@/components/search-bar";
 import { createServiceRoleClient } from "@/lib/supabase"; 
 import { UploadZone } from "@/components/upload-zone";
-import { FileText, ArrowRight, Archive as ArchiveIcon, RotateCcw } from "lucide-react";
+import { FileText, ArrowRight, Archive as ArchiveIcon } from "lucide-react";
 import { revalidatePath } from "next/cache";
 import Link from "next/link"; 
 import { FileActions } from "@/components/file-actions";
-import { RetryButton } from "@/components/retry-button";
 
 const MOCK_USER = {
   id: "00000000-0000-0000-0000-000000000000",
@@ -25,6 +24,7 @@ function StatusBadge({ status }: { status: string }) {
     processing: "bg-purple-50 text-purple-600 border border-purple-100 animate-pulse",
     needs_review: "bg-amber-50 text-amber-700 border border-amber-100", 
     verified: "bg-green-50 text-green-700 border border-green-100",
+    approved: "bg-green-50 text-green-700 border border-green-100",
     error: "bg-red-50 text-red-600 border border-red-100",
   };
   const labels: Record<string, string> = {
@@ -33,6 +33,7 @@ function StatusBadge({ status }: { status: string }) {
     processing: "Analyserar...",
     needs_review: "Granska",
     verified: "Klar",
+    approved: "Godkänd",
     error: "Fel",
   };
   return (
@@ -92,7 +93,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ q
              Arkiv
            </Link>
            <span className="text-slate-300">|</span>
-           <Link href="/collecct" className="px-4 py-2 text-sm font-medium text-indigo-600 hover:text-indigo-700 transition-colors font-semibold">
+           <Link href="/collecct" className="px-4 py-2 text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors">
              Collecct Review
            </Link>
            
@@ -108,10 +109,8 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ q
             <StatsCards documents={documents || []} />
         </div>
 
-        {/* NYA GRAFERNA - Lazy load för bättre prestanda */}
-        {documents && documents.length > 0 && (
-          <DashboardCharts documents={documents} />
-        )}
+        {/* NYA GRAFERNA */}
+        <DashboardCharts documents={documents || []} />
 
         <div className="mb-16">
           <UploadZone />
@@ -170,9 +169,6 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ q
                               >
                               Granska
                               </Link>
-                          )}
-                          {doc.status === "error" && (
-                            <RetryButton docId={doc.id} />
                           )}
                           <FileActions doc={doc} />
                         </div>

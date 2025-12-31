@@ -1,272 +1,645 @@
 "use client";
 
-import { useState } from "react";
-import { Save, Plus, Trash2, Sliders, Database, FileSpreadsheet, ShieldAlert, Zap, CloudCog, Key } from "lucide-react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
+import { 
+  ArrowLeft, 
+  Package, 
+  Zap, 
+  FileText, 
+  Cloud,
+  Plus,
+  X,
+  Save,
+  AlertCircle
+} from "lucide-react";
 
-// Mock-data för material (i en riktig app hämtar vi detta från DB)
-const INITIAL_MATERIALS = [
-  { id: 1, name: "Trä", aliases: ["Brädor", "Virke", "Lastpall", "Spont"] },
-  { id: 2, name: "Gips", aliases: ["Gipsskivor", "Rivningsgips", "Gipsspill"] },
-  { id: 3, name: "Betong", aliases: ["Armerad betong", "Betongkross"] },
-  { id: 4, name: "Brännbart", aliases: ["Restavfall", "Blandat brännbart"] },
-];
-
-// Mock-data för leverantörer med GUIDs
-const INITIAL_SUPPLIERS = [
-  { id: 1, name: "Returab", guid: "550e8400-e29b-41d4-a716-446655440000" },
-  { id: 2, name: "Svenska Servicestyrkan", guid: "a1b2c3d4-e5f6-7890-1234-567890abcdef" },
-  { id: 3, name: "Sortera", guid: "" }, // Saknas, visar att man måste fylla i
-];
+interface Settings {
+  auto_approve_threshold: number;
+  enterprise_auto_approve: boolean;
+  material_synonyms: Record<string, string[]>;
+}
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState("materials");
-  const [materials, setMaterials] = useState(INITIAL_MATERIALS);
-  const [suppliers, setSuppliers] = useState(INITIAL_SUPPLIERS);
-  const [confidenceThreshold, setConfidenceThreshold] = useState(80);
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+  
+  // Local state for editing
+  const [threshold, setThreshold] = useState(80);
+  const [synonyms, setSynonyms] = useState<Record<string, string[]>>({});
+  const [newSynonym, setNewSynonym] = useState<Record<string, string>>({});
+  const [newCategory, setNewCategory] = useState("");
+
+  // Active sidebar item
+  const [activeSection, setActiveSection] = useState("material");
+
+  // Fetch settings on mount
+  useEffect(() => {
+    fetchSettings();
+  }, []);
+
+  const fetchSettings = async () => {
+    try {
+      const response = await fetch("/api/settings");
+      const data = await response.json();
+      
+      if (data.success) {
+        setSettings(data.settings);
+        setThreshold(data.settings.auto_approve_threshold);
+        setSynonyms(data.settings.material_synonyms);
+      }
+    } catch (error) {
+      console.error("Failed to fetch settings:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const saveThreshold = async () => {
+    setSaving(true);
+    try {
+      const response = await fetch("/api/settings/threshold", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ threshold })
+      });
+
+      const data = await response.json();
+      
+      if (data.success) {
+        setMessage({ type: 'success', text: data.message });
+        setTimeout(() => setMessage(null), 3000);
+      } else {
+        setMessage({ type: 'error', text: data.error });
+      }
+    } catch (error) {
+      setMessage({ type: 'error', text: "Kunde inte spara inställningar" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const addSynonym = async (category: string) => {
+    console.log("🔵 addSynonym called");
+    console.log("  Category:", category);
+    console.log("  newSynonym state:", newSynonym);
+    console.log("  Value for this category:", newSynonym[category]);
+    
+    // Check if synonym exists and is not empty
+    if (!newSynonym[category]) {
+      console.log("❌ No synonym entered for category:", category);
+      setMessage({ type: 'error', text: 'Skriv in en synonym först!' });
+      setTimeout(() => setMessage(null), 2000);
+      return;
+    }
+    
+    if (!newSynonym[category].trim()) {
+      console.log("❌ Empty synonym (only whitespace)");
+      setMessage({ type: 'error', text: 'Synonymen kan inte vara tom!' });
+      setTimeout(() => setMessage(null), 2000);
+      return;
+    }
+
+    console.log("🟢 Validation passed, sending to API...");
+    console.log("  Payload:", {
+      action: "add",
+      category,
+      synonym: newSynonym[category].trim()
+    });
+
+    try {
+      const response = await fetch("/api/settings/synonyms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "add",
+          category,
+          synonym: newSynonym[category].trim()
+        })
+      });
+
+      console.log("📡 Response status:", response.status);
+      
+      const data = await response.json();
+      console.log("📦 Response data:", data);
+      
+      if (data.success) {
+        console.log("✅ Synonym added successfully!");
+        setSynonyms(data.material_synonyms);
+        setNewSynonym({ ...newSynonym, [category]: "" });
+        setMessage({ type: 'success', text: "Synonym tillagd!" });
+        setTimeout(() => setMessage(null), 2000);
+      } else {
+        console.log("❌ API returned success: false");
+        setMessage({ type: 'error', text: data.error || "Kunde inte lägga till synonym" });
+        setTimeout(() => setMessage(null), 3000);
+      }
+    } catch (error) {
+      console.error("💥 Error adding synonym:", error);
+      setMessage({ type: 'error', text: "Något gick fel!" });
+      setTimeout(() => setMessage(null), 3000);
+    }
+  };
+
+  const removeSynonym = async (category: string, synonym: string) => {
+    try {
+      const response = await fetch("/api/settings/synonyms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "remove",
+          category,
+          synonym
+        })
+      });
+
+      const data = await response.json();
+      
+      if (data.success) {
+        setSynonyms(data.material_synonyms);
+        setMessage({ type: 'success', text: "Synonym borttagen!" });
+        setTimeout(() => setMessage(null), 2000);
+      }
+    } catch (error) {
+      console.error("Failed to remove synonym:", error);
+    }
+  };
+
+  const addCategory = async () => {
+    console.log("🔵 addCategory called");
+    console.log("  New category:", newCategory);
+    
+    if (!newCategory.trim()) {
+      console.log("❌ Empty category name");
+      setMessage({ type: 'error', text: 'Skriv in ett kategorinamn först!' });
+      setTimeout(() => setMessage(null), 2000);
+      return;
+    }
+
+    console.log("🟢 Adding new category:", newCategory.trim());
+
+    try {
+      // First, add the category to local state
+      const updatedSynonyms = {
+        ...synonyms,
+        [newCategory.trim()]: []
+      };
+      
+      // Then save to database
+      const response = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          material_synonyms: updatedSynonyms
+        })
+      });
+
+      console.log("📡 Response status:", response.status);
+      
+      const data = await response.json();
+      console.log("📦 Response data:", data);
+      
+      if (data.success) {
+        console.log("✅ Category added successfully!");
+        setSynonyms(data.settings.material_synonyms);
+        setNewCategory("");
+        setMessage({ type: 'success', text: "Kategori tillagd!" });
+        setTimeout(() => setMessage(null), 2000);
+      } else {
+        console.log("❌ API returned error:", data.error);
+        setMessage({ type: 'error', text: data.error || "Kunde inte lägga till kategori" });
+        setTimeout(() => setMessage(null), 3000);
+      }
+    } catch (error) {
+      console.error("💥 Error adding category:", error);
+      setMessage({ type: 'error', text: "Något gick fel!" });
+      setTimeout(() => setMessage(null), 3000);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-gray-500">Laddar inställningar...</div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-[#FAFAFA] pb-20">
-      
-      {/* HEADER */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-20">
-        <div className="max-w-5xl mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-             <Link href="/" className="text-slate-400 hover:text-slate-600 transition-colors">Dashboard</Link>
-             <span className="text-slate-300">/</span>
-             <h1 className="font-serif text-lg text-slate-900">Inställningar</h1>
-          </div>
-          <button className="bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-800 transition-colors flex items-center gap-2">
-            <Save className="w-4 h-4" /> Spara ändringar
-          </button>
-        </div>
-      </header>
-
-      <main className="max-w-5xl mx-auto px-6 py-8">
-        <div className="flex flex-col md:flex-row gap-8">
-          
-          {/* SIDEBAR NAVIGATION */}
-          <aside className="w-full md:w-64 flex-shrink-0">
-            <nav className="space-y-1">
-              <button 
-                onClick={() => setActiveTab("materials")}
-                className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl transition-colors ${activeTab === "materials" ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200" : "text-slate-500 hover:bg-slate-100"}`}
-              >
-                <Database className="w-4 h-4" />
-                Material & Synonymer
-              </button>
-              <button 
-                onClick={() => setActiveTab("ai")}
-                className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl transition-colors ${activeTab === "ai" ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200" : "text-slate-500 hover:bg-slate-100"}`}
-              >
-                <Zap className="w-4 h-4" />
-                AI & Automation
-              </button>
-              <button 
-                onClick={() => setActiveTab("export")}
-                className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl transition-colors ${activeTab === "export" ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200" : "text-slate-500 hover:bg-slate-100"}`}
-              >
-                <FileSpreadsheet className="w-4 h-4" />
-                Export & Rapporter
-              </button>
-              <button 
-                onClick={() => setActiveTab("integrations")}
-                className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl transition-colors ${activeTab === "integrations" ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200" : "text-slate-500 hover:bg-slate-100"}`}
-              >
-                <CloudCog className="w-4 h-4" />
-                Azure & GUIDs
-              </button>
-            </nav>
-          </aside>
-
-          {/* CONTENT AREA */}
-          <div className="flex-1 space-y-6">
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <div className="bg-white border-b border-gray-200">
+        <div className="max-w-7xl mx-auto px-6 py-6">
+          <div className="flex items-center justify-between mb-6">
+            <Link
+              href="/collecct"
+              className="flex items-center gap-2 px-4 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Tillbaka</span>
+            </Link>
             
-            {/* --- TAB: MATERIAL --- */}
-            {activeTab === "materials" && (
-              <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-300">
-                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                  <div className="mb-6">
-                    <h2 className="text-lg font-bold text-slate-900">Materialbibliotek</h2>
-                    <p className="text-sm text-slate-500">Lär AI:n dina benämningar. Om fakturan säger "Virke", mappar vi det till "Trä".</p>
-                  </div>
+            <button
+              onClick={() => window.location.href = "/collecct"}
+              className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors"
+            >
+              <Save className="w-4 h-4 inline mr-2" />
+              Spara ändringar
+            </button>
+          </div>
 
-                  <div className="space-y-4">
-                    {materials.map((mat) => (
-                      <div key={mat.id} className="group p-4 rounded-xl border border-slate-100 bg-slate-50/50 hover:border-slate-300 transition-colors">
-                        <div className="flex justify-between items-start mb-3">
-                          <h3 className="font-semibold text-slate-900 flex items-center gap-2">
-                            {mat.name}
-                            <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[10px] rounded-full uppercase tracking-wide">Standard</span>
-                          </h3>
-                          <button className="text-slate-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          {mat.aliases.map((alias, i) => (
-                            <span key={i} className="px-2 py-1 bg-white border border-slate-200 rounded-md text-xs text-slate-600">
-                              {alias}
-                            </span>
-                          ))}
-                          <button className="px-2 py-1 border border-dashed border-slate-300 text-slate-400 hover:text-slate-600 hover:border-slate-400 rounded-md text-xs flex items-center gap-1 transition-colors">
-                            <Plus className="w-3 h-3" /> Synonym
+          <div className="flex items-center gap-2 mb-4">
+            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+            <span className="text-xs font-medium text-green-600 uppercase tracking-wider">
+              SYSTEM ONLINE
+            </span>
+          </div>
+
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">
+            Dashboard
+          </h1>
+          <p className="text-lg text-gray-600">
+            Inställningar
+          </p>
+        </div>
+      </div>
+
+      {/* Toast Message */}
+      {message && (
+        <div className={`fixed top-4 right-4 z-50 px-6 py-3 rounded-lg shadow-lg ${
+          message.type === 'success' ? 'bg-green-600 text-white' : 'bg-red-600 text-white'
+        }`}>
+          {message.text}
+        </div>
+      )}
+
+      {/* Main Content */}
+      <div className="max-w-7xl mx-auto px-6 py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+          {/* Sidebar */}
+          <div className="lg:col-span-1">
+            <div className="bg-white rounded-lg border border-gray-200 p-4">
+              <nav className="space-y-2">
+                <button
+                  onClick={() => setActiveSection("material")}
+                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors text-left ${
+                    activeSection === "material"
+                      ? "bg-blue-50 text-blue-700 border border-blue-200"
+                      : "text-gray-700 hover:bg-gray-50"
+                  }`}
+                >
+                  <Package className="w-5 h-5" />
+                  <span className="font-medium">Material & Synonymer</span>
+                </button>
+
+                <button
+                  onClick={() => setActiveSection("ai")}
+                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors text-left ${
+                    activeSection === "ai"
+                      ? "bg-blue-50 text-blue-700 border border-blue-200"
+                      : "text-gray-700 hover:bg-gray-50"
+                  }`}
+                >
+                  <Zap className="w-5 h-5" />
+                  <span className="font-medium">AI & Automation</span>
+                </button>
+
+                <button
+                  onClick={() => setActiveSection("export")}
+                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors text-left ${
+                    activeSection === "export"
+                      ? "bg-blue-50 text-blue-700 border border-blue-200"
+                      : "text-gray-700 hover:bg-gray-50"
+                  }`}
+                >
+                  <FileText className="w-5 h-5" />
+                  <span className="font-medium">Export & Rapporter</span>
+                </button>
+
+                <button
+                  onClick={() => setActiveSection("azure")}
+                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors text-left ${
+                    activeSection === "azure"
+                      ? "bg-blue-50 text-blue-700 border border-blue-200"
+                      : "text-gray-700 hover:bg-gray-50"
+                  }`}
+                >
+                  <Cloud className="w-5 h-5" />
+                  <span className="font-medium">Azure & GUIDs</span>
+                </button>
+              </nav>
+            </div>
+          </div>
+
+          {/* Content Area */}
+          <div className="lg:col-span-3">
+            {/* Material & Synonymer Section */}
+            {activeSection === "material" && (
+              <div className="bg-white rounded-lg border border-gray-200 p-6">
+                <h2 className="text-xl font-bold text-gray-900 mb-2">
+                  Materialbibliotek
+                </h2>
+                <p className="text-sm text-gray-600 mb-6">
+                  Lär AI:n dina benämningar. Om fakturan säger "Virke", mappar vi det till "Trä".
+                </p>
+
+                {/* Categories */}
+                <div className="space-y-6">
+                  {Object.entries(synonyms).map(([category, items]) => (
+                    <div key={category}>
+                      <div className="flex items-center gap-2 mb-3">
+                        <h3 className="font-semibold text-gray-900">{category}</h3>
+                        <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded">
+                          STANDARD
+                        </span>
+                      </div>
+                      
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        {items.map((synonym) => (
+                          <span
+                            key={synonym}
+                            className="inline-flex items-center gap-2 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-lg"
+                          >
+                            {synonym}
+                            <button
+                              onClick={() => removeSynonym(category, synonym)}
+                              className="hover:text-red-600 transition-colors"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </span>
+                        ))}
+                        
+                        {/* Add Synonym Input */}
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            placeholder="Ny synonym..."
+                            value={newSynonym[category] || ""}
+                            onChange={(e) => setNewSynonym({ ...newSynonym, [category]: e.target.value })}
+                            onKeyPress={(e) => {
+                              if (e.key === "Enter") {
+                                addSynonym(category);
+                              }
+                            }}
+                            className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                          <button
+                            onClick={() => addSynonym(category)}
+                            className="px-3 py-1.5 text-gray-600 hover:text-gray-900 text-sm rounded-lg hover:bg-gray-100 transition-colors"
+                          >
+                            + Synonym
                           </button>
                         </div>
                       </div>
-                    ))}
+                    </div>
+                  ))}
+
+                  {/* Add New Category */}
+                  <div className="pt-4 border-t border-gray-200">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        placeholder="Nytt huvudmaterial..."
+                        value={newCategory}
+                        onChange={(e) => setNewCategory(e.target.value)}
+                        onKeyPress={(e) => {
+                          if (e.key === "Enter") {
+                            addCategory();
+                          }
+                        }}
+                        className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                      <button
+                        onClick={addCategory}
+                        className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors flex items-center gap-2"
+                      >
+                        <Plus className="w-4 h-4" />
+                        Lägg till nytt huvudmaterial
+                      </button>
+                    </div>
                   </div>
-                  
-                  <button className="mt-6 w-full py-3 border-2 border-dashed border-slate-200 rounded-xl text-slate-400 font-medium hover:border-slate-300 hover:text-slate-600 transition-colors flex items-center justify-center gap-2">
-                    <Plus className="w-4 h-4" /> Lägg till nytt huvudmaterial
-                  </button>
                 </div>
               </div>
             )}
 
-            {/* --- TAB: AI & AUTOMATION --- */}
-            {activeTab === "ai" && (
-              <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-300">
-                
-                {/* Confidence Card */}
-                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                  <div className="flex items-start gap-4">
-                    <div className="p-3 bg-amber-50 text-amber-600 rounded-xl">
-                      <ShieldAlert className="w-6 h-6" />
-                    </div>
+            {/* AI & Automation Section */}
+            {activeSection === "ai" && (
+              <div className="space-y-6">
+                {/* Säkerhetströskel */}
+                <div className="bg-white rounded-lg border border-gray-200 p-6">
+                  <div className="flex items-start gap-3 mb-4">
+                    <AlertCircle className="w-5 h-5 text-yellow-600 mt-1" />
                     <div className="flex-1">
-                      <h2 className="text-lg font-bold text-slate-900">Säkerhetströskel</h2>
-                      <p className="text-sm text-slate-500 mb-6">
+                      <h2 className="text-xl font-bold text-gray-900 mb-2">
+                        Säkerhetströskel
+                      </h2>
+                      <p className="text-sm text-gray-600">
                         Bestäm när AI:n ska be om mänsklig granskning. Lägre värde betyder mer automation, men högre risk för fel.
                       </p>
-                      
-                      <div className="space-y-4">
-                        <div className="flex justify-between text-sm font-medium">
-                          <span className="text-slate-500">Tillåtande (60%)</span>
-                          <span className="text-blue-600">{confidenceThreshold}%</span>
-                          <span className="text-slate-500">Strikt (99%)</span>
+                    </div>
+                  </div>
+
+                  {/* Threshold Slider */}
+                  <div className="mb-6">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm text-gray-600">Tillåtande (60%)</span>
+                      <span className="text-2xl font-bold text-gray-900">{threshold}%</span>
+                      <span className="text-sm text-gray-600">Strikt (99%)</span>
+                    </div>
+                    
+                    <input
+                      type="range"
+                      min="60"
+                      max="99"
+                      value={threshold}
+                      onChange={(e) => setThreshold(parseInt(e.target.value))}
+                      className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                    />
+                    
+                    <div className="mt-4 p-3 bg-gray-50 rounded-lg">
+                      <p className="text-xs text-gray-600">
+                        Just nu: Allt med under {threshold}% säkerhet kommer markeras med gul varning.
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={saveThreshold}
+                    disabled={saving}
+                    className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors disabled:opacity-50"
+                  >
+                    {saving ? "Sparar..." : "Spara tröskel"}
+                  </button>
+                </div>
+
+                {/* Auto-Godkännande */}
+                <div className="bg-white rounded-lg border border-gray-200 p-6">
+                  <div className="mb-4">
+                    <h2 className="text-xl font-bold text-gray-900 mb-2">
+                      Auto-Godkännande
+                    </h2>
+                    <p className="text-sm text-gray-600">
+                      Dokumentprocessen godkänner automatiskt dokument med kvalitetsbetyg över 95%. Dokument under tröskeln skickas till mänsklig granskning.
+                    </p>
+                  </div>
+                  
+                  <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+                    <div className="flex items-center gap-2 text-green-700">
+                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                      <p className="text-sm font-medium">
+                        Automatisk godkännande aktivt
+                      </p>
+                    </div>
+                    <p className="text-xs text-green-600 mt-2">
+                      Dokument med 95%+ kvalitet godkänns automatiskt och exporteras till Azure
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Export & Rapporter Section */}
+            {activeSection === "export" && (
+              <div className="bg-white rounded-lg border border-gray-200 p-6">
+                <h2 className="text-xl font-bold text-gray-900 mb-2">
+                  Export & Rapporter
+                </h2>
+                <p className="text-sm text-gray-600 mb-6">
+                  Hantera exportformat och rapportinställningar.
+                </p>
+                
+                <div className="space-y-6">
+                  {/* Export Format */}
+                  <div>
+                    <h3 className="font-semibold text-gray-900 mb-3">Exportformat</h3>
+                    <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-medium text-gray-900">Excel (XLSX)</p>
+                          <p className="text-sm text-gray-600">Standard exportformat för Simplitics</p>
                         </div>
-                        <input 
-                          type="range" 
-                          min="60" 
-                          max="99" 
-                          value={confidenceThreshold}
-                          onChange={(e) => setConfidenceThreshold(Number(e.target.value))}
-                          className="w-full h-2 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                        />
-                        <p className="text-xs text-slate-400 italic">
-                          Just nu: Alla fält med under {confidenceThreshold}% säkerhet kommer markeras med gul varning.
+                        <span className="px-3 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded-full">
+                          AKTIVT
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Export Location */}
+                  <div>
+                    <h3 className="font-semibold text-gray-900 mb-3">Exportdestination</h3>
+                    <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-medium text-gray-900">Azure Blob Storage</p>
+                          <p className="text-sm text-gray-600 font-mono">Container: completed</p>
+                        </div>
+                        <span className="px-3 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded-full">
+                          ANSLUTEN
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Auto-export */}
+                  <div>
+                    <h3 className="font-semibold text-gray-900 mb-3">Automatisk export</h3>
+                    <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+                      <div className="flex items-center gap-2 text-green-700">
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                        <p className="text-sm font-medium">
+                          Godkända dokument exporteras automatiskt
                         </p>
                       </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Auto-Approve Card */}
-                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm opacity-50 grayscale cursor-not-allowed">
-                   <div className="flex justify-between items-center mb-2">
-                      <h3 className="font-bold text-slate-900">Auto-Godkännande</h3>
-                      <span className="px-2 py-1 bg-slate-100 text-slate-500 text-[10px] uppercase font-bold rounded">Enterprise</span>
-                   </div>
-                   <p className="text-sm text-slate-500">Hoppa över granskning helt för dokument med 100% säkerhet.</p>
-                </div>
-
-              </div>
-            )}
-
-            {/* --- TAB: EXPORT --- */}
-            {activeTab === "export" && (
-              <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-300">
-                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                  <h2 className="text-lg font-bold text-slate-900 mb-6">Exportinställningar</h2>
-                  
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between p-4 border border-slate-100 rounded-xl">
-                      <div>
-                        <p className="font-medium text-slate-900">Standardformat</p>
-                        <p className="text-xs text-slate-500">Vilket format föredrar du vid snabb-export?</p>
-                      </div>
-                      <select className="bg-slate-50 border border-slate-200 text-sm rounded-lg p-2 outline-none">
-                        <option>Excel (.xlsx)</option>
-                        <option>CSV (Semikolon-separerad)</option>
-                        <option>JSON (API Standard)</option>
-                      </select>
-                    </div>
-
-                    <div className="flex items-center justify-between p-4 border border-slate-100 rounded-xl">
-                      <div>
-                        <p className="font-medium text-slate-900">Inkludera "Line Items"</p>
-                        <p className="text-xs text-slate-500">Skapa en rad per fraktion istället för per dokument.</p>
-                      </div>
-                      <div className="relative inline-block w-12 h-6 transition duration-200 ease-in-out rounded-full cursor-pointer bg-green-500">
-                        <span className="absolute left-6 top-1 bg-white w-4 h-4 rounded-full shadow-sm"></span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* --- NY FLIK: INTEGRATIONER --- */}
-            {activeTab === "integrations" && (
-              <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-300">
-                
-                {/* AZURE STATUS CARD */}
-                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                  <div className="flex items-start gap-4">
-                    <div className="p-3 bg-blue-50 text-blue-600 rounded-xl">
-                      <CloudCog className="w-6 h-6" />
-                    </div>
-                    <div className="flex-1">
-                      <h2 className="text-lg font-bold text-slate-900">Azure Blob Storage</h2>
-                      <p className="text-sm text-slate-500 mb-4">
-                        Frost lyssnar automatiskt på mappen <code className="px-2 py-1 bg-slate-100 rounded text-xs">/incoming</code> och levererar resultat till <code className="px-2 py-1 bg-slate-100 rounded text-xs">/output</code>.
+                      <p className="text-xs text-green-600 mt-2">
+                        Efter godkännande raderas originalfilen från "unsupported-file-format"
                       </p>
-                      
-                      <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-100 rounded-lg text-green-700 text-sm font-medium">
-                        <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                        Ansluten till: sacollecctanalytics
-                      </div>
                     </div>
                   </div>
                 </div>
-
-                {/* GUID MAPPING CARD */}
-                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                  <div className="flex justify-between items-center mb-6">
-                    <div>
-                        <h2 className="text-lg font-bold text-slate-900">Leverantörs-GUID</h2>
-                        <p className="text-sm text-slate-500">Mappa leverantörsnamn mot era interna KundID-GUIDs för korrekt import.</p>
-                    </div>
-                    <button className="text-xs bg-slate-100 hover:bg-slate-200 px-3 py-1 rounded-lg text-slate-600 font-medium transition-colors">
-                        Synka lista
-                    </button>
-                  </div>
-
-                  <div className="space-y-3">
-                    {suppliers.map((sup) => (
-                      <div key={sup.id} className="flex items-center gap-4 p-3 bg-slate-50 border border-slate-100 rounded-xl">
-                        <div className="w-1/3 font-medium text-slate-700">{sup.name}</div>
-                        <div className="flex-1 relative">
-                            <Key className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
-                            <input 
-                                type="text" 
-                                defaultValue={sup.guid} 
-                                placeholder="Klistra in GUID här..."
-                                className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-mono text-slate-600"
-                            />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
               </div>
             )}
 
+            {/* Azure & GUIDs Section */}
+            {activeSection === "azure" && (
+              <div className="bg-white rounded-lg border border-gray-200 p-6">
+                <h2 className="text-xl font-bold text-gray-900 mb-2">
+                  Azure & GUIDs
+                </h2>
+                <p className="text-sm text-gray-600 mb-6">
+                  Hantera Azure-integration och GUID-inställningar.
+                </p>
+                
+                <div className="space-y-6">
+                  {/* Azure Connection Status */}
+                  <div>
+                    <h3 className="font-semibold text-gray-900 mb-3">Azure Blob Storage</h3>
+                    <div className="space-y-3">
+                      <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="font-medium text-gray-900">Input Container</p>
+                          <span className="px-3 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded-full">
+                            ANSLUTEN
+                          </span>
+                        </div>
+                        <p className="text-sm text-gray-600 font-mono">unsupported-file-format</p>
+                      </div>
+                      
+                      <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="font-medium text-gray-900">Output Container</p>
+                          <span className="px-3 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded-full">
+                            ANSLUTEN
+                          </span>
+                        </div>
+                        <p className="text-sm text-gray-600 font-mono">completed</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Auto-sync */}
+                  <div>
+                    <h3 className="font-semibold text-gray-900 mb-3">Automatisk synkronisering</h3>
+                    <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+                      <div className="flex items-center gap-2 text-green-700">
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                        <p className="text-sm font-medium">
+                          Synkar nya filer var 5:e minut
+                        </p>
+                      </div>
+                      <p className="text-xs text-green-600 mt-2">
+                        Systemet kollar automatiskt efter nya dokument i "unsupported-file-format"
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Filename Format */}
+                  <div>
+                    <h3 className="font-semibold text-gray-900 mb-3">Filnamnhantering</h3>
+                    <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                      <p className="text-sm text-gray-600 mb-2">
+                        Systemet hanterar automatiskt UUID-baserade filnamn från Azure och extraherar datum från filnamn.
+                      </p>
+                      <p className="text-xs text-gray-500 font-mono">
+                        Format: [uuid]_[timestamp]_[datum].pdf
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
-      </main>
+      </div>
     </div>
   );
 }

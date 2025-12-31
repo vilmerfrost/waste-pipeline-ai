@@ -10,10 +10,16 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
+    "@azure/storage-blob": "^12.29.1",
+    "@supabase/ssr": "^0.8.0",
+    "@supabase/supabase-js": "^2.89.0",
+    "exceljs": "^4.4.0",
+    "lucide-react": "^0.562.0",
     "next": "16.0.8",
     "react": "19.2.1",
     "react-dom": "19.2.1",
     "react-dropzone": "^14.3.8",
+    "recharts": "^3.6.0",
     "use-debounce": "^10.0.6",
     "xlsx": "^0.18.5"
   },

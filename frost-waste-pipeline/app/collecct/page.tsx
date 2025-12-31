@@ -1,410 +1,573 @@
-'use client';
+import { createServiceRoleClient } from "@/lib/supabase";
+import Link from "next/link";
+import { FileText, CheckCircle2, AlertCircle, Activity, RefreshCw, ArrowLeft, Download, Settings, Home } from "lucide-react";
+import { AutoFetchButton } from "@/components/auto-fetch-button";
+import { BatchProcessButton } from "@/components/batch-process-button";
+import { GranskaButton } from "@/components/granska-button";
+import { ExportToAzureButton } from "@/components/export-to-azure-button";
+import { Breadcrumbs } from "@/components/breadcrumbs";
+import { getDashboardBreadcrumbs } from "@/lib/breadcrumb-utils";
+import { FilterSection } from "@/components/filter-section";
+import { UndoExportButton } from "@/components/undo-export-button";
+import { formatDate, formatDateTime } from "@/lib/time-utils";
+import { RelativeTime } from "@/components/relative-time";
+import { truncateFilename } from "@/lib/filename-utils";
 
-import { useEffect, useState } from 'react';
-import Link from 'next/link';
-import { FileText } from 'lucide-react';
-import { SystemStatus } from '@/components/SystemStatus';
-import { ActivityFeed } from '@/components/ActivityFeed';
-import { CostSavingsCalculator } from '@/components/CostSavingsCalculator';
-import { getAutoFetcher } from '@/lib/auto-fetcher';
+export const dynamic = "force-dynamic";
 
-interface FileInfo {
-  id: string;
-  filename: string;
-  status: string;
-  uploaded: string;
-  totalRows: number;
-  validRows: number;
-  confidence: number;
-  processingTime: number;
-}
-
-interface Stats {
-  pending: number;
-  processed: number;
-  totalKg: number;
-  documents: number;
-}
-
-function StatCard({ label, value, trend, info }: { label: string; value: string | number; trend?: string; info?: boolean }) {
-  return (
-    <div className="bg-white rounded-lg border border-gray-200 p-6">
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-xs text-gray-500 uppercase tracking-wider">
-          {label}
-        </span>
-        {info && (
-          <svg className="w-3 h-3 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-        )}
-      </div>
-      <div className="text-2xl font-semibold text-gray-900 mb-1">
-        {value}
-      </div>
-      {trend && (
-        <div className="text-xs text-green-600">
-          ↗ {trend}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function FileRow({ 
-  file, 
-  isSelected, 
-  onSelect 
-}: { 
-  file: FileInfo; 
-  isSelected: boolean;
-  onSelect: (id: string) => void;
+export default async function CollecctDashboard({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string }>;
 }) {
-  return (
-    <div className="px-6 py-4 hover:bg-gray-50 transition-colors">
-      <div className="flex items-center gap-4">
-        <input
-          type="checkbox"
-          checked={isSelected}
-          onChange={() => onSelect(file.id)}
-          className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-        />
+  const supabase = createServiceRoleClient();
+  const params = await searchParams;
+  const activeTab = params.tab || "active";
 
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-3 mb-1">
-            <span className="text-sm font-medium text-gray-900 truncate">
-              {file.filename}
-            </span>
-            <span className={`
-              inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium
-              ${file.confidence > 0.95 
-                ? 'bg-green-50 text-green-700' 
-                : file.confidence > 0.90
-                ? 'bg-blue-50 text-blue-700'
-                : 'bg-amber-50 text-amber-700'
-              }
-            `}>
-              {(file.confidence * 100).toFixed(0)}%
-            </span>
-          </div>
-          <div className="flex items-center gap-4 text-xs text-gray-500">
-            <span>{file.validRows} rader</span>
-            <span>•</span>
-            <span>{new Date(file.uploaded).toLocaleString('sv-SE', { hour: '2-digit', minute: '2-digit' })}</span>
-          </div>
-        </div>
+  // Fetch documents - filter by tab
+  let documentsQuery = supabase
+    .from("documents")
+    .select("*")
+    .order("created_at", { ascending: false });
 
-        <Link
-          href={`/collecct/review/${file.id}`}
-          className="px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-        >
-          Granska
-        </Link>
-      </div>
-    </div>
-  );
-}
+  // Filter: Active tab shows non-exported, Archive tab shows exported
+  if (activeTab === "archive") {
+    documentsQuery = documentsQuery.not("exported_at", "is", null);
+  } else {
+    documentsQuery = documentsQuery.is("exported_at", null);
+  }
 
-export default function CollecctReview() {
-  const [queue, setQueue] = useState<FileInfo[]>([]);
-  const [stats, setStats] = useState<Stats>({
-    pending: 0,
-    processed: 0,
-    totalKg: 0,
-    documents: 0
-  });
-  const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [filter, setFilter] = useState<'all' | 'high' | 'needs-review'>('all');
+  const { data: documents } = await documentsQuery;
 
-  // Start auto-fetcher for background processing
-  useEffect(() => {
-    const fetcher = getAutoFetcher();
-    fetcher.start();
-    
-    return () => {
-      fetcher.stop();
-    };
-  }, []);
+  // Filter documents by status (only for active tab)
+  const uploadedDocs = activeTab === "active" 
+    ? documents?.filter(d => d.status === "uploaded") || []
+    : [];
+  const processingDocs = activeTab === "active"
+    ? documents?.filter(d => d.status === "processing") || []
+    : [];
+  const needsReviewDocs = activeTab === "active"
+    ? documents?.filter(d => d.status === "needs_review") || []
+    : [];
+  const approvedDocs = activeTab === "active"
+    ? documents?.filter(d => d.status === "approved") || []
+    : [];
+  const failedDocs = activeTab === "active"
+    ? documents?.filter(d => d.status === "error") || []
+    : [];
+  const exportedDocs = activeTab === "archive"
+    ? documents?.filter(d => d.status === "exported") || []
+    : [];
 
-  // Auto-fetch från API varje 30 sek
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const [queueRes, statsRes] = await Promise.all([
-          fetch('http://localhost:8000/api/files/pending'),
-          fetch('http://localhost:8000/api/stats')
-        ]);
-
-        if (queueRes.ok) {
-          const queueData = await queueRes.json();
-          setQueue(queueData);
-          setStats(prev => ({ ...prev, pending: queueData.length }));
-        }
-
-        if (statsRes.ok) {
-          const statsData = await statsRes.json();
-          setStats(prev => ({
-            ...prev,
-            processed: statsData.approved || 0,
-            documents: statsData.total_processed || 0
-          }));
-        }
-      } catch (error) {
-        console.error('Error fetching data:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-    
-    fetchData();
-    const interval = setInterval(fetchData, 30000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // Calculate total weight from queue
-  useEffect(() => {
-    const totalKg = queue.reduce((sum, file) => {
-      return sum + (file.validRows * 100);
-    }, 0);
-    setStats(prev => ({ ...prev, totalKg }));
-  }, [queue]);
-
-  const approveHighConfidence = async () => {
-    const highConfidenceFiles = queue.filter(f => f.confidence > 0.95);
-    if (highConfidenceFiles.length === 0) {
-      alert('Inga filer med hög konfidensgrad (>95%)');
-      return;
-    }
-
-    if (!confirm(`Godkänna ${highConfidenceFiles.length} filer med hög konfidensgrad?`)) {
-      return;
-    }
-
-    for (const file of highConfidenceFiles) {
-      try {
-        await fetch(`http://localhost:8000/api/files/${file.id}/approve`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fileId: file.id, data: [] })
-        });
-      } catch (error) {
-        console.error(`Error approving ${file.id}:`, error);
-      }
-    }
-
-    window.location.reload();
+  const stats = {
+    total: activeTab === "active" 
+      ? (documents?.filter(d => !d.exported_at).length || 0)
+      : (documents?.filter(d => d.exported_at).length || 0),
+    uploaded: uploadedDocs.length,
+    processing: processingDocs.length,
+    needsReview: needsReviewDocs.length,
+    approved: approvedDocs.length,
+    failed: failedDocs.length,
+    exported: exportedDocs.length,
   };
 
-  const approveSelected = async () => {
-    if (selected.size === 0) return;
+  // Show documents based on active tab (max 10 for cleaner look)
+  const recentDocs = activeTab === "archive"
+    ? exportedDocs.slice(0, 10)
+    : documents?.filter(d => d.status !== 'needs_review').slice(0, 10) || [];
 
-    for (const fileId of selected) {
-      try {
-        await fetch(`http://localhost:8000/api/files/${fileId}/approve`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fileId, data: [] })
-        });
-      } catch (error) {
-        console.error(`Error approving ${fileId}:`, error);
-      }
-    }
-
-    setSelected(new Set());
-    window.location.reload();
-  };
-
-  const toggleSelect = (fileId: string) => {
-    const newSelected = new Set(selected);
-    if (newSelected.has(fileId)) {
-      newSelected.delete(fileId);
-    } else {
-      newSelected.add(fileId);
-    }
-    setSelected(newSelected);
-  };
-
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'a' && !e.ctrlKey && !e.metaKey && document.activeElement?.tagName !== 'INPUT') {
-        e.preventDefault();
-        approveHighConfidence();
-      }
-      
-      if (e.key === 'r' && !e.ctrlKey && !e.metaKey && document.activeElement?.tagName !== 'INPUT') {
-        e.preventDefault();
-        window.location.reload();
-      }
-    };
-    
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [queue]);
-
-  const filteredQueue = queue.filter(file => {
-    if (filter === 'high') return file.confidence > 0.95;
-    if (filter === 'needs-review') return file.confidence < 0.90;
-    return true;
-  });
+  // Calculate quality metrics
+  const avgCompleteness = documents && documents.length > 0
+    ? documents
+        .filter(d => d.extracted_data?._validation?.completeness)
+        .reduce((sum, d) => sum + (d.extracted_data._validation.completeness || 0), 0) / 
+        documents.filter(d => d.extracted_data?._validation?.completeness).length
+    : 0;
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header - EXAKT som Screenshot 1 */}
+      {/* Header - Clean and Professional */}
       <div className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-8 py-12">
-          {/* System status */}
-          <div className="flex items-center gap-2 mb-6">
-            <div className="w-2 h-2 bg-green-500 rounded-full" />
-            <span className="text-xs text-gray-500 uppercase tracking-wider">
+        <div className="max-w-7xl mx-auto px-6 py-6">
+          {/* Breadcrumbs */}
+          <Breadcrumbs items={getDashboardBreadcrumbs()} className="mb-4" />
+          
+          {/* Top Navigation Bar */}
+          <div className="flex items-center justify-between mb-6">
+            {/* Left: Back button */}
+            <Link
+              href="/"
+              className="flex items-center gap-2 px-4 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Tillbaka</span>
+            </Link>
+
+            {/* Right: Action buttons */}
+            <div className="flex items-center gap-3">
+              {activeTab === "active" && approvedDocs.length > 0 && (
+                <ExportToAzureButton 
+                  selectedDocuments={approvedDocs.map(d => d.id)}
+                />
+              )}
+              
+              <Link
+                href="/health"
+                className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-all text-sm font-medium"
+              >
+                <Activity className="w-4 h-4" />
+                <span>Health</span>
+              </Link>
+
+              <Link
+                href="/settings"
+                className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-all text-sm font-medium"
+              >
+                <Settings className="w-4 h-4" />
+                <span>Inställningar</span>
+              </Link>
+
+              <AutoFetchButton />
+            </div>
+          </div>
+
+          {/* System Status */}
+          <div className="flex items-center gap-2 mb-4">
+            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+            <span className="text-xs font-medium text-green-600 uppercase tracking-wider">
               SYSTEM ONLINE
-            </span>
-            <span className="text-xs text-gray-400 ml-2">
-              I väntan • Uppdaterad {new Date().toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })}
             </span>
           </div>
 
-          {/* Title - samma serif font som "Analysera fakturor" */}
-          <h1 className="font-serif text-[2.5rem] text-gray-900 font-normal mb-3">
-            Granska dokument
+          {/* Title */}
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">
+            Collecct Review
           </h1>
-          <p className="text-gray-400 text-lg font-light max-w-2xl">
-            Automatiskt extraherade från Simplitics. Granska och godkänn innan Power BI.
+          <p className="text-lg text-teal-600 italic font-medium mb-2">
+            Dashboard
           </p>
-
+          <p className="text-sm text-gray-600">
+            Granska och godkänn dokument för Collecct AB.
+          </p>
+          
           {/* Tabs */}
-          <div className="flex gap-8 mt-8 border-b border-gray-200">
-            <button className="pb-4 border-b-2 border-blue-600 text-sm font-medium text-gray-900">
-              Collecct Review
-            </button>
-            <Link 
-              href="/"
-              className="pb-4 text-sm font-medium text-gray-500 hover:text-gray-900"
+          <div className="flex gap-2 border-b border-gray-200 mt-6">
+            <a
+              href="/collecct?tab=active"
+              className={`px-4 py-2 text-sm font-medium transition-colors ${
+                activeTab === "active" || !activeTab
+                  ? "text-blue-600 border-b-2 border-blue-600"
+                  : "text-gray-600 hover:text-gray-900"
+              }`}
             >
-              Arkiv
-            </Link>
+              Aktiva ({documents?.filter(d => !d.exported_at).length || 0})
+            </a>
+            <a
+              href="/collecct?tab=archive"
+              className={`px-4 py-2 text-sm font-medium transition-colors ${
+                activeTab === "archive"
+                  ? "text-blue-600 border-b-2 border-blue-600"
+                  : "text-gray-600 hover:text-gray-900"
+              }`}
+            >
+              Arkiverade ({documents?.filter(d => d.exported_at).length || 0})
+            </a>
           </div>
         </div>
       </div>
 
-      {/* Content */}
-      <div className="max-w-7xl mx-auto px-8 py-8">
-        {/* Stats - EXAKT samma grid som Screenshot 1 */}
-        <div className="grid grid-cols-4 gap-6 mb-8">
-          <StatCard 
-            label="VÄNTANDE"
-            value={stats.pending}
-            info
-          />
-          <StatCard 
-            label="TOTAL VIKT"
-            value={`${(stats.totalKg / 1000).toFixed(1)} ton`}
-            trend="Analyserat värde"
-          />
-          <StatCard 
-            label="DOKUMENT"
-            value={stats.documents}
-          />
-          <StatCard 
-            label="GODKÄNDA"
-            value={stats.processed}
-          />
-        </div>
-
-        {/* Filter buttons - minimal design */}
-        <div className="flex items-center gap-3 mb-6">
-          <button
-            onClick={() => setFilter('all')}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              filter === 'all'
-                ? 'bg-blue-50 text-blue-700 border border-blue-200'
-                : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
-            }`}
-          >
-            Alla
-          </button>
-          <button
-            onClick={() => setFilter('high')}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              filter === 'high'
-                ? 'bg-blue-50 text-blue-700 border border-blue-200'
-                : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
-            }`}
-          >
-            Hög kvalitet (&gt;95%)
-          </button>
-          <button
-            onClick={() => setFilter('needs-review')}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              filter === 'needs-review'
-                ? 'bg-blue-50 text-blue-700 border border-blue-200'
-                : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
-            }`}
-          >
-            Behöver granskning (&lt;90%)
-          </button>
-
-          {selected.size > 0 && (
-            <button
-              onClick={approveSelected}
-              className="ml-auto px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 transition-colors"
-            >
-              Godkänn {selected.size} filer
-            </button>
-          )}
-        </div>
-
-        {/* Cost Savings & Activity Feed */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-          <CostSavingsCalculator />
-          <ActivityFeed />
-        </div>
-
-        {/* File list - samma table style */}
-        <div className="bg-white rounded-lg border border-gray-200 shadow-sm">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <h2 className="text-base font-medium text-gray-900">
-              Senaste filer ({filteredQueue.length})
-            </h2>
+      {/* Stats Cards */}
+      <div className="max-w-7xl mx-auto px-6 py-8">
+        {/* Batch Processing UI */}
+        {uploadedDocs.length > 0 && (
+          <BatchProcessButton uploadedDocs={uploadedDocs} />
+        )}
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          {/* Total */}
+          <div className="bg-white rounded-lg border border-gray-200 p-6">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-medium text-gray-600 uppercase tracking-wide">
+                TOTALT
+              </span>
+              <div className="w-2 h-2 rounded-full bg-gray-400" />
+            </div>
+            <div className="text-4xl font-bold text-gray-900 mb-1">
+              {stats.total}
+            </div>
+            <p className="text-xs text-gray-500">Dokument</p>
           </div>
 
-          {loading ? (
-            <div className="px-6 py-12 text-center">
-              <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-gray-400"></div>
-              <p className="text-sm text-gray-500 mt-4">Laddar filer...</p>
+          {/* Needs Review - Clickable */}
+          <a 
+            href="#needs-review-section"
+            className="bg-white rounded-lg border border-gray-200 p-6 hover:shadow-md transition-shadow cursor-pointer block"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-medium text-gray-600 uppercase tracking-wide">
+                BEHÖVER GRANSKNING
+              </span>
+              <div className="w-2 h-2 rounded-full bg-yellow-500" />
             </div>
-          ) : filteredQueue.length === 0 ? (
-            <div className="px-6 py-12 text-center">
-              <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-gray-100 mb-4">
-                <FileText className="w-6 h-6 text-gray-400" />
-              </div>
-              <p className="text-sm text-gray-500">
-                Inga filer i kön just nu
-              </p>
-              <p className="text-xs text-gray-400 mt-1">
-                Nya filer från Simplitics dyker upp här automatiskt
-              </p>
+            <div className="text-4xl font-bold text-gray-900 mb-1">
+              {stats.needsReview}
             </div>
-          ) : (
-            <div className="divide-y divide-gray-100">
-              {filteredQueue.map(file => (
-                <FileRow 
-                  key={file.id} 
-                  file={file}
-                  isSelected={selected.has(file.id)}
-                  onSelect={toggleSelect}
-                />
-              ))}
+            <p className="text-xs text-yellow-600 font-medium">Väntar - Klicka för att visa</p>
+          </a>
+
+          {/* Approved */}
+          <div className="bg-white rounded-lg border border-gray-200 p-6">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-medium text-gray-600 uppercase tracking-wide">
+                GODKÄNDA
+              </span>
+              <div className="w-2 h-2 rounded-full bg-green-500" />
             </div>
-          )}
+            <div className="text-4xl font-bold text-gray-900 mb-1">
+              {stats.approved}
+            </div>
+            <p className="text-xs text-gray-500">
+              {activeTab === "active" ? "Redo för export" : "Exporterade"}
+            </p>
+          </div>
+
+          {/* Failed */}
+          <div className="bg-white rounded-lg border border-gray-200 p-6">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-medium text-gray-600 uppercase tracking-wide">
+                FEL
+              </span>
+              <div className="w-2 h-2 rounded-full bg-red-500" />
+            </div>
+            <div className="text-4xl font-bold text-gray-900 mb-1">
+              {stats.failed}
+            </div>
+            <p className="text-xs text-red-600 font-medium">Kräver åtgärd</p>
+          </div>
         </div>
 
-        {/* Keyboard shortcuts hint - subtle */}
-        <div className="mt-6 text-xs text-gray-400">
-          Tangentbordsgenvägar: 
-          <kbd className="ml-2 px-1.5 py-0.5 bg-gray-100 border border-gray-200 rounded text-gray-600">A</kbd> godkänn hög kvalitet • 
-          <kbd className="ml-2 px-1.5 py-0.5 bg-gray-100 border border-gray-200 rounded text-gray-600">R</kbd> uppdatera
+        {/* PRIORITY: Documents Needing Review - SHOW FIRST */}
+        {needsReviewDocs.length > 0 && activeTab === "active" && (
+          <div id="needs-review-section" className="mb-8">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                <span className="w-3 h-3 bg-yellow-500 rounded-full animate-pulse"></span>
+                Behöver granskning
+              </h2>
+              <p className="text-sm text-gray-500">
+                {needsReviewDocs.length} dokument väntar
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {needsReviewDocs.slice(0, 9).map((doc) => {
+                const validation = doc.extracted_data?._validation;
+                const completeness = validation?.completeness || 100;
+                const materialCount = doc.extracted_data?.lineItems?.length || doc.extracted_data?.rows?.length || 0;
+                const totalWeight = doc.extracted_data?.totalWeightKg || 
+                  (doc.extracted_data?.lineItems?.reduce((sum: number, item: any) => 
+                    sum + (item.weightKg || 0), 0) || 0);
+
+                return (
+                  <div
+                    key={doc.id}
+                    className="bg-white rounded-lg border-2 border-yellow-300 overflow-hidden hover:shadow-md transition-shadow"
+                  >
+                    <div className="p-5 border-b border-yellow-100 bg-yellow-50">
+                      <div className="flex items-start gap-3 mb-3">
+                        <div className="flex-shrink-0 w-10 h-10 bg-yellow-100 rounded-lg flex items-center justify-center">
+                          <FileText className="w-5 h-5 text-yellow-700" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <h3 
+                            className="font-medium text-gray-900 text-sm truncate mb-1"
+                            title={doc.filename}
+                          >
+                            {truncateFilename(doc.filename, 30)}
+                          </h3>
+                          <p className="text-xs text-gray-500" title={formatDate(doc.created_at)}>
+                            <RelativeTime date={doc.created_at} />
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="p-5 space-y-3">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-gray-600">Material:</span>
+                        <span className="font-medium text-gray-900">{materialCount} rader</span>
+                      </div>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-gray-600">Total vikt:</span>
+                        <span className="font-medium text-gray-900">
+                          {totalWeight > 0 ? `${(totalWeight / 1000).toFixed(1)} ton` : '0 kg'}
+                        </span>
+                      </div>
+                      
+                      <div>
+                        <div className="flex items-center justify-between text-xs mb-1">
+                          <span className="text-gray-600">Fullständighet:</span>
+                          <span className={`font-medium ${
+                            completeness >= 95 ? 'text-green-600' :
+                            completeness >= 80 ? 'text-yellow-600' :
+                            'text-red-600'
+                          }`}>
+                            {completeness.toFixed(0)}%
+                          </span>
+                        </div>
+                        <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full transition-all ${
+                              completeness >= 95 ? 'bg-green-500' :
+                              completeness >= 80 ? 'bg-yellow-500' :
+                              'bg-red-500'
+                            }`}
+                            style={{ width: `${Math.min(completeness, 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="p-5 pt-0">
+                      <Link
+                        href={`/review/${doc.id}`}
+                        className="block w-full py-2.5 px-4 bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium rounded-lg transition-colors text-center"
+                      >
+                        Granska nu
+                      </Link>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {needsReviewDocs.length > 9 && (
+              <p className="text-center text-sm text-gray-500 mt-4">
+                + {needsReviewDocs.length - 9} fler dokument som behöver granskning
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Senaste Dokument Section */}
+        <div className="mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold text-gray-900">
+              Senaste dokument
+            </h2>
+            <p className="text-sm text-gray-500">
+              Visar {recentDocs.length} av {stats.total} dokument
+            </p>
+          </div>
+
+          {recentDocs.length === 0 ? (
+            <div className="bg-white rounded-lg border-2 border-dashed border-gray-300 p-16 text-center">
+              <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-50 rounded-full mb-4">
+                <FileText className="w-8 h-8 text-blue-600" />
+              </div>
+              <h3 className="text-xl font-semibold text-gray-900 mb-2">
+                {activeTab === "archive" 
+                  ? "Inga arkiverade dokument ännu"
+                  : "Inga dokument ännu"}
+              </h3>
+              <p className="text-gray-600 mb-6">
+                {activeTab === "archive"
+                  ? "Exporterade dokument visas här"
+                  : "Börja med att synka dokument från Azure"}
+              </p>
+              {activeTab === "active" && <AutoFetchButton />}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {recentDocs.map((doc) => {
+                const validation = doc.extracted_data?._validation;
+                const completeness = validation?.completeness || 100;
+                const isProcessed = doc.status !== 'uploaded';
+                const materialCount = doc.extracted_data?.lineItems?.length || doc.extracted_data?.rows?.length || 0;
+                const totalWeight = doc.extracted_data?.totalWeightKg || 
+                  (doc.extracted_data?.lineItems?.reduce((sum: number, item: any) => 
+                    sum + (item.weightKg || 0), 0) || 0);
+
+                return (
+                  <div
+                    key={doc.id}
+                    className="bg-white rounded-lg border border-gray-200 overflow-hidden hover:shadow-md transition-shadow"
+                  >
+                    {/* Document Header */}
+                    <div className="p-5 border-b border-gray-100">
+                      <div className="flex items-start justify-between gap-3 mb-3">
+                        <div className="flex items-start gap-3 flex-1 min-w-0">
+                          <div className="flex-shrink-0 w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
+                            <FileText className="w-5 h-5 text-gray-600" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <h3 
+                              className="font-medium text-gray-900 text-sm truncate mb-1"
+                              title={doc.filename}
+                            >
+                              {truncateFilename(doc.filename, 30)}
+                            </h3>
+                            <p className="text-xs text-gray-500" title={formatDate(doc.created_at)}>
+                              <RelativeTime date={doc.created_at} />
+                            </p>
+                          </div>
+                        </div>
+                        {/* Status Badge */}
+                        <div className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-all ${
+                          doc.status === 'uploaded' ? 'bg-blue-100 text-blue-800' :
+                          doc.status === 'processing' ? 'bg-blue-100 text-blue-800 animate-pulse' :
+                          doc.status === 'needs_review' ? 'bg-yellow-100 text-yellow-800' :
+                          doc.status === 'approved' ? 'bg-green-100 text-green-800' :
+                          doc.status === 'exported' ? 'bg-purple-100 text-purple-800' :
+                          doc.status === 'error' ? 'bg-red-100 text-red-800' :
+                          'bg-gray-100 text-gray-800'
+                        }`}>
+                          {doc.status === 'uploaded' && 'Uppladdad'}
+                          {doc.status === 'processing' && '🔄 Behandlar...'}
+                          {doc.status === 'needs_review' && 'Behöver granskning'}
+                          {doc.status === 'approved' && '✅ Godkänd'}
+                          {doc.status === 'exported' && '📤 Exporterad'}
+                          {doc.status === 'error' && '❌ Fel'}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Document Stats */}
+                    <div className="p-5 space-y-3">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-gray-600">Material:</span>
+                        <span className="font-medium text-gray-900">
+                          {isProcessed ? `${materialCount} rader` : 'Ej processad'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-gray-600">Total vikt:</span>
+                        <span className="font-medium text-gray-900">
+                          {isProcessed 
+                            ? (totalWeight > 0 ? `${(totalWeight / 1000).toFixed(1)} ton` : '0 kg')
+                            : '-'
+                          }
+                        </span>
+                      </div>
+                      
+                      {/* Completeness Bar */}
+                      <div>
+                        <div className="flex items-center justify-between text-xs mb-1">
+                          <span className="text-gray-600">Fullständighet:</span>
+                          <span className={`font-medium ${
+                            !isProcessed ? 'text-gray-400' :
+                            completeness >= 95 ? 'text-green-600' :
+                            completeness >= 80 ? 'text-yellow-600' :
+                            'text-red-600'
+                          }`}>
+                            {isProcessed ? `${completeness.toFixed(0)}%` : '-'}
+                          </span>
+                        </div>
+                        <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full transition-all ${
+                              !isProcessed ? 'bg-gray-300' :
+                              completeness >= 95 ? 'bg-green-500' :
+                              completeness >= 80 ? 'bg-yellow-500' :
+                              'bg-red-500'
+                            }`}
+                            style={{ width: isProcessed ? `${completeness}%` : '0%' }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Validation Warnings */}
+                      {validation && validation.issues && validation.issues.length > 0 && (
+                        <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                          <div className="flex items-start gap-2">
+                            <AlertCircle className="w-4 h-4 text-yellow-600 flex-shrink-0 mt-0.5" />
+                            <div>
+                              <p className="text-xs font-medium text-yellow-800 mb-1">
+                                Varningar:
+                              </p>
+                              <ul className="text-xs text-yellow-700 space-y-1">
+                                {validation.issues.slice(0, 2).map((issue: string, idx: number) => (
+                                  <li key={idx} className="truncate">• {issue}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Action Button */}
+                    <div className="p-5 pt-0">
+                      {doc.status === 'uploaded' && (
+                        <GranskaButton documentId={doc.id} filename={doc.filename} />
+                      )}
+                      {doc.status === 'processing' && (
+                        <div className="px-4 py-2 bg-gray-100 text-gray-600 rounded-lg font-medium flex items-center justify-center gap-2">
+                          <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                          </svg>
+                          Behandlar...
+                        </div>
+                      )}
+                      {doc.status === 'needs_review' && (
+                        <Link
+                          href={`/review/${doc.id}`}
+                          className="block w-full py-2.5 px-4 bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium rounded-lg transition-colors text-center"
+                        >
+                          Granska nu
+                        </Link>
+                      )}
+                      {doc.status === 'approved' && (
+                        <Link
+                          href={`/review/${doc.id}`}
+                          className="block w-full py-2.5 px-4 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors text-center"
+                        >
+                          Se detaljer
+                        </Link>
+                      )}
+                      {doc.status === 'exported' && (
+                        <div className="space-y-2">
+                          <div className="px-4 py-2 bg-purple-50 border border-purple-200 rounded-lg text-center">
+                            <p className="text-xs text-purple-700 font-medium">📤 Exporterad</p>
+                            {doc.exported_at && (
+                              <p className="text-xs text-purple-600 mt-1" title={formatDateTime(doc.exported_at)}>
+                                <RelativeTime date={doc.exported_at} />
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex gap-2">
+                            {doc.extracted_data?.azure_export_url && (
+                              <a
+                                href={doc.extracted_data.azure_export_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex-1 py-2 px-4 bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium rounded-lg transition-colors text-center"
+                              >
+                                Öppna i Azure
+                              </a>
+                            )}
+                            <UndoExportButton 
+                              documentId={doc.id} 
+                              filename={doc.filename}
+                              variant="icon"
+                            />
+                          </div>
+                        </div>
+                      )}
+                      {doc.status === 'error' && (
+                        <Link
+                          href={`/review/${doc.id}`}
+                          className="block w-full py-2.5 px-4 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors text-center"
+                        >
+                          Visa fel
+                        </Link>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>
