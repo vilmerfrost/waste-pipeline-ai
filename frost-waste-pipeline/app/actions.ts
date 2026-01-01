@@ -593,6 +593,78 @@ export async function deleteMaterial(formData: FormData) {
 }
 
 /**
+ * RETRY PROCESSING
+ * Retries processing a document that failed (status = "error")
+ */
+export async function retryProcessing(documentId: string) {
+  const supabase = createServiceRoleClient();
+  const { data: doc } = await supabase.from("documents").select("*").eq("id", documentId).single();
+  if (!doc) throw new Error("Dokument hittades inte");
+  
+  // Bara tillåt retry om dokumentet har status "error"
+  if (doc.status !== "error") {
+    throw new Error("Kan bara försöka igen på dokument med fel-status");
+  }
+
+  // Återställ status och kör processDocument igen
+  await supabase.from("documents").update({ status: "uploaded" }).eq("id", documentId);
+  
+  try {
+    await processDocument(documentId);
+    revalidatePath("/");
+    revalidatePath("/archive");
+  } catch (error) {
+    // Om det fortfarande misslyckas, sätt tillbaka till error
+    await supabase.from("documents").update({ status: "error" }).eq("id", documentId);
+    throw error;
+  }
+}
+
+/**
+ * ARKIVERA ALLA DOKUMENT
+ * Sätter archived = true på alla dokument som inte redan är arkiverade
+ */
+export async function archiveAllDocuments() {
+  const supabase = createServiceRoleClient();
+  
+  // Uppdatera alla dokument som INTE är arkiverade
+  const { error } = await supabase
+    .from("documents")
+    .update({ archived: true })
+    .eq("archived", false); // Påverkar bara den aktiva listan
+
+  if (error) {
+    console.error("Archive All Error:", error);
+    throw new Error("Kunde inte arkivera allt.");
+  }
+
+  revalidatePath("/");
+  revalidatePath("/archive");
+}
+
+/**
+ * GODKÄNN ALLA DOKUMENT
+ * Sätter status = "approved" på alla dokument som behöver granskas
+ */
+export async function verifyAllDocuments() {
+  const supabase = createServiceRoleClient();
+  
+  // Uppdatera alla dokument som behöver granskas eller är i processing
+  const { error } = await supabase
+    .from("documents")
+    .update({ status: "approved" })
+    .in("status", ["needs_review", "processing", "uploaded", "queued"]);
+
+  if (error) {
+    console.error("Verify All Error:", error);
+    throw new Error("Kunde inte godkänna allt.");
+  }
+
+  revalidatePath("/");
+  revalidatePath("/review/[id]", "page");
+}
+
+/**
  * REJECT DOCUMENT (Collecct workflow)
  * Rejects a document for manual processing
  */
