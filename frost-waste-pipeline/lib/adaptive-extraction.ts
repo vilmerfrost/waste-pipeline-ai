@@ -8,6 +8,74 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY!,
 });
 
+// ============================================================================
+// KNOWN ATTRIBUTE SYNONYMS (Swedish reference - LLM translates on-the-fly)
+// The LLM will recognize Norwegian, Danish, Finnish, and English equivalents
+// ============================================================================
+const KNOWN_ATTRIBUTES = {
+  Material: {
+    aliases: ["Material", "Materialname", "Materialid", "Artikel", "Avfallstyp", "Avfall", "Beskrivning", "Fraktion", "Restprodukt text", "avfallsfraktion", "Materialbenämning", "Fraktionsnamn", "Taxekod", "BEAst-artikel"],
+    required: true,
+    description: "Waste material type/name"
+  },
+  LocationReference: {
+    aliases: ["Littra", "Littera", "Uppdragsställe", "Arbetsplatsnamn", "Anläggningsaddress", "Producent adress", "Adress", "Flexplatsadress", "Hämtadress", "Hämtställe", "Anladress", "Delprojektnamn"],
+    required: true,
+    description: "Pickup location or address reference"
+  },
+  HazardousWaste: {
+    aliases: ["Farligt avfall"],
+    required: false,
+    description: "Hazardous waste indicator"
+  },
+  ReceiverReference: {
+    aliases: ["Mottagare adress", "Leveransställe", "Mottagarebeskr", "Mottagare", "Mottagningsanläggning"],
+    required: false,
+    description: "Waste receiver/destination"
+  },
+  Amount: {
+    aliases: ["Kvantitet", "Antal", "faktisk vikt (kg)", "Vikt (kg)", "Vikt kg", "Mängd", "Ackumulerat", "Vikt", "vikt, kg", "antal kg", "enhet kg", "Vikt körtur", "Antalsvärde kg", "Total-Vikt av Fraktioner"],
+    required: true,
+    description: "Weight/quantity amount"
+  },
+  Unit: {
+    aliases: ["Enhet", "Enhet deb", "Enhet körtur"],
+    required: true,
+    description: "Unit of measurement"
+  },
+  WOTimeFinished: {
+    aliases: ["Datum", "Date", "Utfört Datum", "Utförtdatum", "Utförd datum", "Utförddatum", "Datum utfört", "Datum utförd", "Utförandedatum", "Arbetsorder utförd", "Hämtdatum", "Utförande utfört", "Leveransdatum"],
+    required: true,
+    description: "Date when work was completed"
+  }
+};
+
+// Supported languages for document processing
+const SUPPORTED_LANGUAGES = ["Swedish", "Norwegian", "Danish", "Finnish", "English"];
+
+// Build a formatted string of all synonyms for LLM prompts (Swedish reference)
+function buildSynonymGuide(): string {
+  const header = `MULTI-LANGUAGE SUPPORT: ${SUPPORTED_LANGUAGES.join(", ")}
+The Swedish terms below are the REFERENCE. Also recognize translations/equivalents in Norwegian, Danish, Finnish, and English.\n\n`;
+  
+  const guide = Object.entries(KNOWN_ATTRIBUTES)
+    .map(([attr, config]) => {
+      const reqLabel = config.required ? "✓ REQUIRED" : "○ Optional";
+      return `${attr} (${reqLabel}):
+  Description: ${config.description}
+  Swedish reference terms: ${config.aliases.join(", ")}`;
+    })
+    .join("\n\n");
+  return header + guide;
+}
+
+// Build a compact lookup format for extraction
+function buildColumnLookup(): string {
+  return Object.entries(KNOWN_ATTRIBUTES)
+    .map(([attr, config]) => `${attr}: [${config.aliases.join(" | ")}]`)
+    .join("\n");
+}
+
 // Types for verification results
 interface VerificationResult {
   verifiedItems: any[];
@@ -38,32 +106,66 @@ async function analyzeDocumentStructure(
     .map(row => row.join('\t'))
     .join('\n');
   
-  const analysisPrompt = `Analyze this Swedish waste document and map columns.
+  // Build synonym guide for column detection
+  const synonymGuide = buildSynonymGuide();
+  const columnLookup = buildColumnLookup();
+  
+  const analysisPrompt = `Analyze this waste management document and map columns to standard attributes.
 
 DOCUMENT: ${filename}
 
-SAMPLE:
+SAMPLE DATA:
 ${sample}
 
-Identify columns for: DATE, LOCATION, MATERIAL, WEIGHT, UNIT, RECEIVER, COST (optional)
+═══════════════════════════════════════════════════════════════════════════════
+MULTI-LANGUAGE SUPPORT
+═══════════════════════════════════════════════════════════════════════════════
+This document may be in: Swedish, Norwegian, Danish, Finnish, or English.
 
-⚠️ DATE COLUMN NOTE: Excel dates may appear as:
-- Text: "2024-01-02" or "2024/01/02"
-- Numbers: 45294 (Excel serial date = days since 1899-12-30)
-- Swedish format: "2 jan 2024"
-Look for columns named "Datum", "Date", or containing 5-digit numbers (40000-50000 range = years 2009-2036)
+Below are the SWEDISH REFERENCE TERMS for each attribute. 
+If the document is in another language, recognize the EQUIVALENT TERMS:
+- Norwegian (NO): Similar to Swedish, e.g., "Vekt" = "Vikt", "Mengde" = "Mängd"
+- Danish (DK): Similar to Swedish/Norwegian, e.g., "Vægt" = "Vikt", "Mængde" = "Mängd"
+- Finnish (FI): Different language family, e.g., "Paino" = "Vikt", "Määrä" = "Mängd", "Päivämäärä" = "Datum"
+- English (EN): e.g., "Weight" = "Vikt", "Quantity" = "Mängd", "Date" = "Datum"
 
-JSON output (no markdown):
+═══════════════════════════════════════════════════════════════════════════════
+SWEDISH REFERENCE TERMS (match these OR their translations)
+═══════════════════════════════════════════════════════════════════════════════
+${synonymGuide}
+
+═══════════════════════════════════════════════════════════════════════════════
+COLUMN DETECTION INSTRUCTIONS
+═══════════════════════════════════════════════════════════════════════════════
+1. First DETECT the document language from column headers and content
+2. MATCH columns to attributes using Swedish reference OR equivalent terms in detected language
+3. Use FUZZY MATCHING - columns may have slight variations (case, spacing, abbreviations)
+4. For DATE columns, also look for Excel serial dates (5-digit numbers like 45294)
+
+Priority order for ambiguous matches:
+- LOCATION: Littra > Uppdragsställe > Adress (or equivalents)
+- MATERIAL: Material > Fraktion > Avfallstyp (or equivalents)
+- WEIGHT: Vikt > Kvantitet > Mängd (or equivalents)
+
+COMPACT SWEDISH REFERENCE:
+${columnLookup}
+
+JSON OUTPUT (no markdown, no backticks):
 {
-  "columnMapping": {"Datum": "date", ...},
-  "dateColumn": "Datum",
-  "locationColumn": "Uppdragsställe",
-  "materialColumn": "Material",
-  "weightColumn": "Kvantitet",
-  "unitColumn": "Enhet",
-  "receiverColumn": "Anläggning",
+  "detectedLanguage": "Swedish|Norwegian|Danish|Finnish|English",
+  "columnMapping": {"ColumnName": "attributeType", ...},
+  "dateColumn": "matched column name or null",
+  "locationColumn": "matched column name or null",
+  "materialColumn": "matched column name or null",
+  "weightColumn": "matched column name or null",
+  "unitColumn": "matched column name or null",
+  "receiverColumn": "matched column name or null",
+  "hazardousColumn": "matched column name or null",
   "costColumn": null,
-  "confidence": 0.95
+  "confidence": 0.95,
+  "translations": [
+    {"originalColumn": "Vægt", "detectedLanguage": "Danish", "mappedTo": "Amount", "swedishEquivalent": "Vikt"}
+  ]
 }`;
 
   try {
@@ -83,10 +185,19 @@ JSON output (no markdown):
     const analysis = JSON.parse(cleaned);
     
     console.log(`✓ Structure analyzed (confidence: ${(analysis.confidence * 100).toFixed(0)}%)`);
+    console.log(`  Language: ${analysis.detectedLanguage || 'Swedish (assumed)'}`);
     console.log(`  Date: ${analysis.dateColumn || 'NOT FOUND'}`);
     console.log(`  Location: ${analysis.locationColumn || 'NOT FOUND'}`);
     console.log(`  Material: ${analysis.materialColumn || 'NOT FOUND'}`);
     console.log(`  Weight: ${analysis.weightColumn || 'NOT FOUND'}`);
+    
+    // Log any translations detected
+    if (analysis.translations && analysis.translations.length > 0) {
+      console.log(`  Translations detected:`);
+      analysis.translations.forEach((t: any) => {
+        console.log(`    - "${t.originalColumn}" (${t.detectedLanguage}) → ${t.mappedTo} (Swedish: ${t.swedishEquivalent})`);
+      });
+    }
     
     return analysis;
     
@@ -135,40 +246,85 @@ async function extractChunkWithFallback(
   const dateMatch = filename.match(/(\d{4}[-_]\d{2}[-_]\d{2})/);
   const filenameDate = dateMatch ? dateMatch[0].replace(/[-_]/g, '-') : null;
   
-  // Material synonyms
-  const synonyms = Object.entries(settings.material_synonyms || {})
+  // Material synonyms from settings
+  const materialSynonyms = Object.entries(settings.material_synonyms || {})
     .map(([std, syns]) => `${std}: ${(syns as string[]).join(", ")}`)
     .join("\n");
   
-  const prompt = `Extract ALL rows from table to clean JSON.
+  // Build attribute synonym reference for extraction
+  const attributeSynonymRef = buildColumnLookup();
+  
+  const prompt = `Extract ALL rows from this waste document table to clean JSON.
 
-DOCUMENT STRUCTURE (confidence: ${(structure.confidence * 100).toFixed(0)}%):
-- DATE: "${structure.dateColumn}" column → OUTPUT as YYYY-MM-DD
-  ⚠️ EXCEL SERIAL DATES: If date is a NUMBER (like 45294), convert it!
-     Formula: days since 1899-12-30. Example: 45294 = 2024-01-02, 46024 = 2026-01-02
-     If date is already text like "2024-01-02", use as-is.
-     If no date found, use fallback: ${filenameDate || 'today\'s date'}
-- LOCATION: "${structure.locationColumn}" column
-- MATERIAL: "${structure.materialColumn}" column (use standard names from synonyms)
-- WEIGHT: "${structure.weightColumn}" column (convert to kg!)
-- RECEIVER: "${structure.receiverColumn}" or use "${receiver}"
+═══════════════════════════════════════════════════════════════════════════════
+MULTI-LANGUAGE SUPPORT
+═══════════════════════════════════════════════════════════════════════════════
+Document may be in: Swedish, Norwegian, Danish, Finnish, or English.
+Recognize column names and values in any of these languages.
+Output data in ENGLISH field names with original values preserved.
 
-MATERIAL SYNONYMS:
-${synonyms}
+═══════════════════════════════════════════════════════════════════════════════
+DOCUMENT STRUCTURE (confidence: ${(structure.confidence * 100).toFixed(0)}%)
+Detected language: ${structure.detectedLanguage || 'Swedish (assumed)'}
+═══════════════════════════════════════════════════════════════════════════════
+Detected columns:
+- DATE: "${structure.dateColumn}" → OUTPUT as YYYY-MM-DD
+- LOCATION: "${structure.locationColumn}"
+- MATERIAL: "${structure.materialColumn}"
+- WEIGHT: "${structure.weightColumn}" (convert to kg!)
+- UNIT: "${structure.unitColumn}"
+- RECEIVER: "${structure.receiverColumn}" or use default: "${receiver}"
+- HAZARDOUS: "${structure.hazardousColumn || 'not detected'}"
 
-WEIGHT CONVERSION:
-- ton/t → ×1000
-- g → ÷1000
-- lbs/lb → ×0.454
-- kg → as-is
+═══════════════════════════════════════════════════════════════════════════════
+SWEDISH REFERENCE TERMS (match these OR translations in other languages)
+═══════════════════════════════════════════════════════════════════════════════
+${attributeSynonymRef}
 
-TABLE (chunk ${chunkNum}/${totalChunks}, ${chunkRows.length} rows):
+If document is NOT in Swedish, recognize equivalent terms:
+- NO: Vekt=Vikt, Mengde=Mängd, Dato=Datum, Mottaker=Mottagare
+- DK: Vægt=Vikt, Mængde=Mängd, Dato=Datum, Modtager=Mottagare
+- FI: Paino=Vikt, Määrä=Mängd, Päivämäärä=Datum, Vastaanottaja=Mottagare
+- EN: Weight=Vikt, Quantity=Mängd, Date=Datum, Receiver=Mottagare
+
+═══════════════════════════════════════════════════════════════════════════════
+DATE HANDLING
+═══════════════════════════════════════════════════════════════════════════════
+⚠️ EXCEL SERIAL DATES: If date is a NUMBER (like 45294), convert it!
+   Formula: days since 1899-12-30. Example: 45294 = 2024-01-02
+   
+Recognize date formats in all languages and output as YYYY-MM-DD:
+- "2 jan 2024" / "2. januar 2024" / "2.1.2024" / "Jan 2, 2024" → "2024-01-02"
+   
+If no date found, use fallback: ${filenameDate || 'today\'s date'}
+
+═══════════════════════════════════════════════════════════════════════════════
+MATERIAL STANDARDIZATION
+═══════════════════════════════════════════════════════════════════════════════
+${materialSynonyms}
+
+═══════════════════════════════════════════════════════════════════════════════
+WEIGHT CONVERSION (always output in kg)
+═══════════════════════════════════════════════════════════════════════════════
+- ton/t/tonn/tonnes → ×1000
+- g/gram → ÷1000
+- kg/kilogram → as-is
+
+═══════════════════════════════════════════════════════════════════════════════
+TABLE DATA (chunk ${chunkNum}/${totalChunks}, ${chunkRows.length} rows)
+═══════════════════════════════════════════════════════════════════════════════
 ${tsv}
 
-JSON OUTPUT (no markdown, no backticks, just JSON, NO {value, confidence} wrappers):
-{"items":[{"date":"2024-01-16","location":"Address","material":"Material","weightKg":185,"unit":"Kg","receiver":"${receiver}"}]}
+═══════════════════════════════════════════════════════════════════════════════
+JSON OUTPUT FORMAT (no markdown, no backticks)
+═══════════════════════════════════════════════════════════════════════════════
+{"items":[{"date":"2024-01-16","location":"Address","material":"Material","weightKg":185,"unit":"Kg","receiver":"${receiver}","isHazardous":false}]}
 
-CRITICAL: Extract ALL ${chunkRows.length} rows! ALWAYS output date as YYYY-MM-DD string!`;
+CRITICAL:
+1. Extract ALL ${chunkRows.length} rows!
+2. Output dates as YYYY-MM-DD
+3. Convert all weights to kg
+4. Set isHazardous:true if hazardous waste indicator present (Farligt avfall / Farlig avfall / Vaarallinen jäte / Hazardous)`;
 
   // TRY 1: Haiku (fast & cheap)
   console.log(`   🔄 Attempt 1: Using Haiku`);
@@ -753,6 +909,16 @@ export async function extractAdaptive(
   }
   
   console.log(`\n📊 RESULTS:`);
+  console.log(`   Document language: ${structure.detectedLanguage || 'Swedish (assumed)'}`);
+  if (structure.translations && structure.translations.length > 0) {
+    console.log(`   Translations applied: ${structure.translations.length}`);
+    structure.translations.slice(0, 3).forEach((t: any) => {
+      console.log(`      "${t.originalColumn}" → ${t.mappedTo}`);
+    });
+    if (structure.translations.length > 3) {
+      console.log(`      ... and ${structure.translations.length - 3} more`);
+    }
+  }
   console.log(`   Extracted: ${allItems.length}/${totalRows} (${(extractionRate*100).toFixed(0)}%)`);
   console.log(`   Aggregated: ${aggregated.length} rows`);
   console.log(`   Total weight: ${(totalWeight/1000).toFixed(2)} ton`);
@@ -795,6 +961,11 @@ export async function extractAdaptive(
       chunked: true,
       chunks: totalChunks,
       model: "adaptive-haiku-sonnet",
+      // Language detection and translations
+      language: {
+        detected: structure.detectedLanguage || "Swedish",
+        translations: structure.translations || [],
+      },
       // Verification info in metadata
       verification: {
         enabled: enableVerification,
