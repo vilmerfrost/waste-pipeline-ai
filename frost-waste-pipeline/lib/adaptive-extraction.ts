@@ -142,6 +142,7 @@ ${synonyms}
 WEIGHT CONVERSION:
 - ton/t → ×1000
 - g → ÷1000
+- lbs/lb → ×0.454
 - kg → as-is
 
 TABLE (chunk ${chunkNum}/${totalChunks}, ${chunkRows.length} rows):
