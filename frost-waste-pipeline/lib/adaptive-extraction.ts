@@ -1,11 +1,28 @@
 // ADAPTIVE EXTRACTION SYSTEM WITH SONNET FALLBACK
 // Handles chaotic documents with real confidence scores
+// Includes optional verification step to detect hallucinations
 
 import Anthropic from "@anthropic-ai/sdk";
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY!,
 });
+
+// Types for verification results
+interface VerificationResult {
+  verifiedItems: any[];
+  hallucinations: HallucinationIssue[];
+  verificationConfidence: number;
+  verificationTime: number;
+}
+
+interface HallucinationIssue {
+  rowIndex: number;
+  field: string;
+  extracted: any;
+  issue: string;
+  severity: 'warning' | 'error';
+}
 
 // ============================================================================
 // STEP 1: ANALYZE DOCUMENT STRUCTURE
@@ -285,6 +302,176 @@ CRITICAL: Extract ALL ${chunkRows.length} rows! ALWAYS output date as YYYY-MM-DD
 }
 
 // ============================================================================
+// STEP 2.5: VERIFY EXTRACTION AGAINST SOURCE (Anti-Hallucination)
+// ============================================================================
+async function verifyExtractionAgainstSource(
+  originalTsv: string,
+  extractedItems: any[],
+  chunkNum: number,
+  totalChunks: number
+): Promise<VerificationResult> {
+  
+  const startTime = Date.now();
+  console.log(`   🔍 Verifying ${extractedItems.length} items against source (chunk ${chunkNum}/${totalChunks})...`);
+  
+  // Limit items to verify (for cost control)
+  const itemsToVerify = extractedItems.slice(0, 25);
+  
+  const verificationPrompt = `You are a data verification agent. Your job is to check if extracted data actually exists in the source document.
+
+SOURCE DOCUMENT (chunk ${chunkNum}/${totalChunks}):
+${originalTsv}
+
+EXTRACTED DATA TO VERIFY:
+${JSON.stringify(itemsToVerify, null, 2)}
+
+For EACH extracted row (by index), verify these fields exist in the source:
+1. DATE - Does this date (or similar format) appear in source?
+2. LOCATION - Does this address/location text appear?
+3. MATERIAL - Does this material name (or synonym) appear?
+4. WEIGHT - Does this weight value appear? Watch for unit conversion errors (500 kg vs 5000 kg)
+5. RECEIVER - Does this appear, or was it likely inferred from filename?
+
+⚠️ COMMON HALLUCINATION PATTERNS TO DETECT:
+- Made-up addresses that don't exist in source
+- Wrong weight magnitude (10x errors: 185 vs 1850)
+- Dates from wrong rows
+- Materials that don't appear anywhere in source
+
+OUTPUT FORMAT (JSON only, no markdown):
+{
+  "verified": [
+    {
+      "rowIndex": 0,
+      "date": { "found": true, "sourceMatch": "2024-01-02", "confidence": 1.0 },
+      "location": { "found": true, "sourceMatch": "Kungsgatan 5", "confidence": 1.0 },
+      "material": { "found": true, "sourceMatch": "Brännbart", "confidence": 0.95 },
+      "weightKg": { "found": true, "sourceMatch": "185 kg", "confidence": 1.0 },
+      "receiver": { "found": false, "inferred": true, "confidence": 0.7 }
+    }
+  ],
+  "hallucinations": [
+    { "rowIndex": 2, "field": "weightKg", "extracted": 5000, "issue": "Source shows 500, possible 10x error", "severity": "error" }
+  ],
+  "overallConfidence": 0.92
+}`;
+
+  try {
+    const response = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 4096,
+      temperature: 0,
+      messages: [{ role: "user", content: verificationPrompt }]
+    });
+    
+    const text = response.content
+      .filter((b: any) => b.type === 'text')
+      .map((b: any) => (b as any).text)
+      .join('');
+    
+    // Parse JSON response
+    let cleaned = text
+      .replace(/```json/gi, '')
+      .replace(/```/g, '')
+      .replace(/^[^{[]+/, '')
+      .replace(/[^}\]]+$/, '')
+      .trim();
+    
+    let result: any;
+    try {
+      result = JSON.parse(cleaned);
+    } catch {
+      // Try to extract JSON object
+      const firstBrace = cleaned.indexOf('{');
+      const lastBrace = cleaned.lastIndexOf('}');
+      if (firstBrace !== -1 && lastBrace > firstBrace) {
+        result = JSON.parse(cleaned.substring(firstBrace, lastBrace + 1));
+      } else {
+        throw new Error("Could not parse verification response");
+      }
+    }
+    
+    // Calculate per-item verification confidence
+    const verifiedItems = extractedItems.map((item, idx) => {
+      const verification = result.verified?.find((v: any) => v.rowIndex === idx);
+      
+      if (!verification) {
+        // Item wasn't verified (beyond limit)
+        return {
+          ...item,
+          _verified: idx >= 25 ? 'skipped' : false,
+          _verificationConfidence: idx >= 25 ? null : 0.5,
+        };
+      }
+      
+      // Calculate average confidence across verified fields
+      const fields = ['date', 'location', 'material', 'weightKg', 'receiver'];
+      const confidences = fields
+        .map(f => verification[f]?.confidence)
+        .filter((c): c is number => typeof c === 'number');
+      
+      const avgConfidence = confidences.length > 0 
+        ? confidences.reduce((a, b) => a + b, 0) / confidences.length 
+        : 0.5;
+      
+      // Flag potential issues
+      const unfoundFields = fields.filter(f => verification[f]?.found === false && !verification[f]?.inferred);
+      
+      return {
+        ...item,
+        _verified: true,
+        _verificationConfidence: avgConfidence,
+        _possibleHallucination: avgConfidence < 0.7 || unfoundFields.length > 1,
+        _unfoundFields: unfoundFields.length > 0 ? unfoundFields : undefined,
+      };
+    });
+    
+    const hallucinations: HallucinationIssue[] = (result.hallucinations || []).map((h: any) => ({
+      rowIndex: h.rowIndex,
+      field: h.field,
+      extracted: h.extracted,
+      issue: h.issue,
+      severity: h.severity || 'warning'
+    }));
+    
+    const verificationTime = Date.now() - startTime;
+    const overallConfidence = result.overallConfidence || 0.8;
+    
+    console.log(`   ✓ Verification complete: ${(overallConfidence * 100).toFixed(0)}% confidence (${verificationTime}ms)`);
+    
+    if (hallucinations.length > 0) {
+      console.log(`   ⚠️  Found ${hallucinations.length} potential hallucination(s):`);
+      hallucinations.slice(0, 3).forEach(h => {
+        console.log(`      - Row ${h.rowIndex}: ${h.field} = ${h.extracted} (${h.issue})`);
+      });
+    }
+    
+    return {
+      verifiedItems,
+      hallucinations,
+      verificationConfidence: overallConfidence,
+      verificationTime
+    };
+    
+  } catch (error: any) {
+    const verificationTime = Date.now() - startTime;
+    console.log(`   ⚠️  Verification failed (${verificationTime}ms): ${error.message}`);
+    
+    // Return items without verification
+    return {
+      verifiedItems: extractedItems.map(item => ({ 
+        ...item, 
+        _verified: false,
+        _verificationError: error.message 
+      })),
+      hallucinations: [],
+      verificationConfidence: 0,
+      verificationTime
+    };
+  }
+}
+
+// ============================================================================
 // STEP 3: MAIN ADAPTIVE EXTRACTION FLOW
 // ============================================================================
 export async function extractAdaptive(
@@ -299,6 +486,14 @@ export async function extractAdaptive(
   uniqueReceivers: number;
   uniqueMaterials: number;
   _validation: any;
+  _verification?: {
+    enabled: boolean;
+    confidence: number;
+    hallucinations: HallucinationIssue[];
+    totalTime: number;
+    itemsVerified: number;
+    itemsFlagged: number;
+  };
 }> {
   
   console.log(`\n${"=".repeat(80)}`);
@@ -343,6 +538,18 @@ export async function extractAdaptive(
   
   console.log(`\n📦 EXTRACTING: ${totalChunks} chunks of ${CHUNK_SIZE} rows\n`);
   
+  // Check if verification is enabled (default: false to save costs)
+  const enableVerification = settings.enable_verification ?? false;
+  const verificationThreshold = settings.verification_confidence_threshold ?? 0.85;
+  
+  // Verification tracking
+  let totalVerificationTime = 0;
+  let allHallucinations: HallucinationIssue[] = [];
+  let totalVerifiedItems = 0;
+  let totalFlaggedItems = 0;
+  let verificationConfidenceSum = 0;
+  let verificationChunks = 0;
+  
   for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
     const start = chunkIndex * CHUNK_SIZE;
     const end = Math.min(start + CHUNK_SIZE, totalRows);
@@ -350,7 +557,12 @@ export async function extractAdaptive(
     
     console.log(`📦 Chunk ${chunkIndex + 1}/${totalChunks}: rows ${start + 1}-${end}`);
     
-    const items = await extractChunkWithFallback(
+    // Build TSV for this chunk (needed for verification)
+    const chunkTsv = [header, ...chunkRows]
+      .map(row => row.map(cell => String(cell || "")).join('\t'))
+      .join('\n');
+    
+    let items = await extractChunkWithFallback(
       header,
       chunkRows,
       structure,
@@ -360,10 +572,51 @@ export async function extractAdaptive(
       settings
     );
     
+    // VERIFICATION STEP (if enabled)
+    if (enableVerification && items.length > 0) {
+      // Conditionally verify: always verify if structure confidence is low, or sample verify otherwise
+      const shouldVerify = structure.confidence < verificationThreshold || chunkIndex === 0;
+      
+      if (shouldVerify) {
+        const verificationResult = await verifyExtractionAgainstSource(
+          chunkTsv,
+          items,
+          chunkIndex + 1,
+          totalChunks
+        );
+        
+        items = verificationResult.verifiedItems;
+        allHallucinations.push(...verificationResult.hallucinations);
+        totalVerificationTime += verificationResult.verificationTime;
+        verificationConfidenceSum += verificationResult.verificationConfidence;
+        verificationChunks++;
+        
+        // Count verified and flagged items
+        items.forEach(item => {
+          if (item._verified === true) totalVerifiedItems++;
+          if (item._possibleHallucination) totalFlaggedItems++;
+        });
+      }
+    }
+    
     allItems.push(...items);
   }
   
   console.log(`\n✅ TOTAL EXTRACTED: ${allItems.length}/${totalRows} rows (${((allItems.length/totalRows)*100).toFixed(0)}%)`);
+  
+  // Log verification summary if enabled
+  if (enableVerification) {
+    const avgVerificationConfidence = verificationChunks > 0 
+      ? verificationConfidenceSum / verificationChunks 
+      : 0;
+    console.log(`\n🔍 VERIFICATION SUMMARY:`);
+    console.log(`   Chunks verified: ${verificationChunks}/${totalChunks}`);
+    console.log(`   Items verified: ${totalVerifiedItems}`);
+    console.log(`   Items flagged: ${totalFlaggedItems}`);
+    console.log(`   Hallucinations found: ${allHallucinations.length}`);
+    console.log(`   Avg confidence: ${(avgVerificationConfidence * 100).toFixed(0)}%`);
+    console.log(`   Total time: ${totalVerificationTime}ms`);
+  }
   
   // Infer receiver and date from filename for all items
   let receiver = "Okänd mottagare";
@@ -483,14 +736,52 @@ export async function extractAdaptive(
     extractionRate
   );
   
+  // Build verification summary for metadata
+  const avgVerificationConfidence = verificationChunks > 0 
+    ? verificationConfidenceSum / verificationChunks 
+    : 0;
+  
+  // Adjust overall confidence based on verification results
+  let finalConfidence = overallConfidence;
+  if (enableVerification && verificationChunks > 0) {
+    // Blend extraction confidence with verification confidence
+    finalConfidence = (overallConfidence * 0.6) + (avgVerificationConfidence * 0.4);
+    
+    // Penalize for hallucinations
+    const hallucinationPenalty = Math.min(allHallucinations.length * 0.05, 0.3);
+    finalConfidence = Math.max(0, finalConfidence - hallucinationPenalty);
+  }
+  
   console.log(`\n📊 RESULTS:`);
   console.log(`   Extracted: ${allItems.length}/${totalRows} (${(extractionRate*100).toFixed(0)}%)`);
   console.log(`   Aggregated: ${aggregated.length} rows`);
   console.log(`   Total weight: ${(totalWeight/1000).toFixed(2)} ton`);
   console.log(`   Unique addresses: ${uniqueAddresses}`);
   console.log(`   Unique materials: ${uniqueMaterials}`);
-  console.log(`   Confidence: ${(overallConfidence*100).toFixed(0)}%`);
+  console.log(`   Confidence: ${(finalConfidence*100).toFixed(0)}%${enableVerification ? ' (verified)' : ''}`);
+  if (enableVerification && allHallucinations.length > 0) {
+    console.log(`   ⚠️  Potential issues: ${allHallucinations.length} hallucination(s) detected`);
+  }
   console.log(`${"=".repeat(80)}\n`);
+  
+  // Build verification metadata
+  const verificationMetadata = enableVerification ? {
+    enabled: true,
+    confidence: avgVerificationConfidence,
+    hallucinations: allHallucinations,
+    totalTime: totalVerificationTime,
+    itemsVerified: totalVerifiedItems,
+    itemsFlagged: totalFlaggedItems,
+    chunksVerified: verificationChunks,
+    totalChunks: totalChunks,
+  } : {
+    enabled: false,
+    confidence: 0,
+    hallucinations: [],
+    totalTime: 0,
+    itemsVerified: 0,
+    itemsFlagged: 0,
+  };
   
   return {
     lineItems: aggregated,
@@ -499,11 +790,19 @@ export async function extractAdaptive(
       extractedRows: allItems.length,
       aggregatedRows: aggregated.length,
       structure: structure.columnMapping,
-      confidence: overallConfidence,
+      confidence: finalConfidence,
       extractionRate,
       chunked: true,
       chunks: totalChunks,
-      model: "adaptive-haiku-sonnet"
+      model: "adaptive-haiku-sonnet",
+      // Verification info in metadata
+      verification: {
+        enabled: enableVerification,
+        confidence: avgVerificationConfidence,
+        hallucinationsFound: allHallucinations.length,
+        itemsFlagged: totalFlaggedItems,
+        timeMs: totalVerificationTime,
+      }
     },
     totalWeightKg: totalWeight,
     uniqueAddresses,
@@ -511,10 +810,19 @@ export async function extractAdaptive(
     uniqueMaterials,
     _validation: {
       completeness: extractionRate * 100,
-      confidence: overallConfidence * 100,
-      issues: allItems.length < totalRows * 0.9 
-        ? [`Missing ${totalRows - allItems.length} rows`] 
-        : []
-    }
+      confidence: finalConfidence * 100,
+      issues: [
+        ...(allItems.length < totalRows * 0.9 
+          ? [`Missing ${totalRows - allItems.length} rows`] 
+          : []),
+        ...(allHallucinations.length > 0 
+          ? [`${allHallucinations.length} potential hallucination(s) detected`] 
+          : []),
+        ...(totalFlaggedItems > 0 
+          ? [`${totalFlaggedItems} items flagged for review`] 
+          : []),
+      ]
+    },
+    _verification: verificationMetadata
   };
 }

@@ -18,6 +18,8 @@ interface Settings {
   auto_approve_threshold: number;
   enterprise_auto_approve: boolean;
   material_synonyms: Record<string, string[]>;
+  enable_verification: boolean;
+  verification_confidence_threshold: number;
 }
 
 export default function SettingsPage() {
@@ -31,6 +33,10 @@ export default function SettingsPage() {
   const [synonyms, setSynonyms] = useState<Record<string, string[]>>({});
   const [newSynonym, setNewSynonym] = useState<Record<string, string>>({});
   const [newCategory, setNewCategory] = useState("");
+  
+  // Verification settings
+  const [enableVerification, setEnableVerification] = useState(false);
+  const [verificationThreshold, setVerificationThreshold] = useState(85);
 
   // Active sidebar item
   const [activeSection, setActiveSection] = useState("material");
@@ -49,6 +55,8 @@ export default function SettingsPage() {
         setSettings(data.settings);
         setThreshold(data.settings.auto_approve_threshold);
         setSynonyms(data.settings.material_synonyms);
+        setEnableVerification(data.settings.enable_verification ?? false);
+        setVerificationThreshold((data.settings.verification_confidence_threshold ?? 0.85) * 100);
       }
     } catch (error) {
       console.error("Failed to fetch settings:", error);
@@ -70,6 +78,33 @@ export default function SettingsPage() {
       
       if (data.success) {
         setMessage({ type: 'success', text: data.message });
+        setTimeout(() => setMessage(null), 3000);
+      } else {
+        setMessage({ type: 'error', text: data.error });
+      }
+    } catch (error) {
+      setMessage({ type: 'error', text: "Kunde inte spara inställningar" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveVerificationSettings = async () => {
+    setSaving(true);
+    try {
+      const response = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enable_verification: enableVerification,
+          verification_confidence_threshold: verificationThreshold / 100
+        })
+      });
+
+      const data = await response.json();
+      
+      if (data.success) {
+        setMessage({ type: 'success', text: "Verifieringsinställningar sparade!" });
         setTimeout(() => setMessage(null), 3000);
       } else {
         setMessage({ type: 'error', text: data.error });
@@ -499,6 +534,130 @@ export default function SettingsPage() {
                       Dokument med 95%+ kvalitet godkänns automatiskt och exporteras till Azure
                     </p>
                   </div>
+                </div>
+
+                {/* Hallucinationskontroll (Verification) */}
+                <div className="bg-white rounded-lg border border-gray-200 p-6">
+                  <div className="flex items-start gap-3 mb-4">
+                    <svg className="w-5 h-5 text-purple-600 mt-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                    </svg>
+                    <div className="flex-1">
+                      <h2 className="text-xl font-bold text-gray-900 mb-2">
+                        Hallucinationskontroll
+                      </h2>
+                      <p className="text-sm text-gray-600">
+                        AI:n verifierar extraherade data mot originaldokumentet för att upptäcka felaktiga värden (hallucinationer).
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Enable Toggle */}
+                  <div className="mb-6">
+                    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-200">
+                      <div>
+                        <p className="font-medium text-gray-900">Aktivera verifiering</p>
+                        <p className="text-sm text-gray-600">
+                          Extra LLM-anrop för att dubbelkontrollera extraherade värden
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setEnableVerification(!enableVerification)}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                          enableVerification ? 'bg-purple-600' : 'bg-gray-300'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                            enableVerification ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Verification Threshold (only shown if enabled) */}
+                  {enableVerification && (
+                    <div className="mb-6 p-4 bg-purple-50 border border-purple-200 rounded-lg">
+                      <div className="mb-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-sm text-gray-600">Verifiera när konfidensen är under:</span>
+                          <span className="text-xl font-bold text-purple-700">{verificationThreshold}%</span>
+                        </div>
+                        
+                        <input
+                          type="range"
+                          min="50"
+                          max="100"
+                          value={verificationThreshold}
+                          onChange={(e) => setVerificationThreshold(parseInt(e.target.value))}
+                          className="w-full h-2 bg-purple-200 rounded-lg appearance-none cursor-pointer accent-purple-600"
+                        />
+                        
+                        <div className="flex justify-between mt-1">
+                          <span className="text-xs text-gray-500">Mer verifiering (50%)</span>
+                          <span className="text-xs text-gray-500">Mindre verifiering (100%)</span>
+                        </div>
+                      </div>
+                      
+                      <div className="p-3 bg-white rounded-lg border border-purple-100">
+                        <p className="text-xs text-gray-600">
+                          <strong>Hur det fungerar:</strong> Efter extraktion skickas resultatet tillbaka till AI:n 
+                          tillsammans med originaldokumentet. AI:n verifierar att varje värde (datum, adress, vikt, material) 
+                          faktiskt finns i dokumentet och inte är påhittat.
+                        </p>
+                      </div>
+                      
+                      <div className="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                        <p className="text-xs text-yellow-800">
+                          <strong>⚠️ Kostnad:</strong> Verifiering använder extra API-anrop (~$0.001/chunk). 
+                          Rekommenderas för kritiska dokument eller när konfidensen är låg.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Status indicator */}
+                  <div className={`p-4 rounded-lg ${
+                    enableVerification 
+                      ? 'bg-purple-50 border border-purple-200' 
+                      : 'bg-gray-50 border border-gray-200'
+                  }`}>
+                    <div className="flex items-center gap-2">
+                      {enableVerification ? (
+                        <>
+                          <svg className="w-5 h-5 text-purple-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                          </svg>
+                          <p className="text-sm font-medium text-purple-700">
+                            Hallucinationskontroll aktiv
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <svg className="w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+                          </svg>
+                          <p className="text-sm font-medium text-gray-600">
+                            Hallucinationskontroll avstängd
+                          </p>
+                        </>
+                      )}
+                    </div>
+                    {enableVerification && (
+                      <p className="text-xs text-purple-600 mt-2">
+                        Extraktioner med under {verificationThreshold}% konfidens verifieras automatiskt mot källdokumentet
+                      </p>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={saveVerificationSettings}
+                    disabled={saving}
+                    className="w-full mt-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium transition-colors disabled:opacity-50"
+                  >
+                    {saving ? "Sparar..." : "Spara verifieringsinställningar"}
+                  </button>
                 </div>
               </div>
             )}

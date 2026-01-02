@@ -24,7 +24,10 @@ export async function GET() {
           "Gips": ["Gipsskivor", "Rivningsgips", "Gipsspill"],
           "Betong": ["Armerad betong", "Betongkross"],
           "Brännbart": ["Restavfall", "Blandat brännbart"]
-        }
+        },
+        // Verification settings (anti-hallucination)
+        enable_verification: false, // Off by default to save API costs
+        verification_confidence_threshold: 0.85 // Verify if extraction confidence < 85%
       }
     });
   } catch (error: any) {
@@ -41,7 +44,13 @@ export async function POST(request: Request) {
 
   try {
     const body = await request.json();
-    const { auto_approve_threshold, enterprise_auto_approve, material_synonyms } = body;
+    const { 
+      auto_approve_threshold, 
+      enterprise_auto_approve, 
+      material_synonyms,
+      enable_verification,
+      verification_confidence_threshold
+    } = body;
 
     // Validate threshold
     if (auto_approve_threshold !== undefined) {
@@ -53,13 +62,25 @@ export async function POST(request: Request) {
       }
     }
 
+    // Validate verification confidence threshold
+    if (verification_confidence_threshold !== undefined) {
+      if (verification_confidence_threshold < 0.5 || verification_confidence_threshold > 1.0) {
+        return NextResponse.json(
+          { success: false, error: "Verification threshold must be between 50% and 100%" },
+          { status: 400 }
+        );
+      }
+    }
+
     // Update settings
     const { data, error } = await supabase
       .from("settings")
       .update({
         ...(auto_approve_threshold !== undefined && { auto_approve_threshold }),
         ...(enterprise_auto_approve !== undefined && { enterprise_auto_approve }),
-        ...(material_synonyms !== undefined && { material_synonyms })
+        ...(material_synonyms !== undefined && { material_synonyms }),
+        ...(enable_verification !== undefined && { enable_verification }),
+        ...(verification_confidence_threshold !== undefined && { verification_confidence_threshold })
       })
       .eq("user_id", "default")
       .select()
