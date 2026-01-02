@@ -130,13 +130,13 @@ async function createExcelForDocument(doc: any): Promise<Buffer> {
   
   // Simplitics-compatible headers
   worksheet.columns = [
-    { header: "WOTimeFinished", key: "date", width: 12 },
-    { header: "LocationReference", key: "location", width: 30 },
+    { header: "Utförtdatum", key: "date", width: 12 },
+    { header: "Hämtställe", key: "location", width: 30 },
     { header: "Material", key: "material", width: 20 },
-    { header: "Amount", key: "weightKg", width: 12 },
-    { header: "Unit", key: "unit", width: 10 },
-    { header: "ReceiverReference", key: "receiver", width: 20 },
-    { header: "HazardousWaste", key: "isHazardous", width: 15 },
+    { header: "Kvantitet", key: "weightKg", width: 12 },
+    { header: "Enhet", key: "unit", width: 10 },
+    { header: "Leveransställe", key: "receiver", width: 20 },
+    { header: "Farligt avfall", key: "isHazardous", width: 15 },
   ];
   
   // Style header

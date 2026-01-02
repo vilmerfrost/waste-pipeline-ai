@@ -30,6 +30,12 @@ ${sample}
 
 Identify columns for: DATE, LOCATION, MATERIAL, WEIGHT, UNIT, RECEIVER, COST (optional)
 
+⚠️ DATE COLUMN NOTE: Excel dates may appear as:
+- Text: "2024-01-02" or "2024/01/02"
+- Numbers: 45294 (Excel serial date = days since 1899-12-30)
+- Swedish format: "2 jan 2024"
+Look for columns named "Datum", "Date", or containing 5-digit numbers (40000-50000 range = years 2009-2036)
+
 JSON output (no markdown):
 {
   "columnMapping": {"Datum": "date", ...},
@@ -120,7 +126,11 @@ async function extractChunkWithFallback(
   const prompt = `Extract ALL rows from table to clean JSON.
 
 DOCUMENT STRUCTURE (confidence: ${(structure.confidence * 100).toFixed(0)}%):
-- DATE: "${structure.dateColumn}" column (YYYY-MM-DD) or fallback: ${filenameDate || 'today'}
+- DATE: "${structure.dateColumn}" column → OUTPUT as YYYY-MM-DD
+  ⚠️ EXCEL SERIAL DATES: If date is a NUMBER (like 45294), convert it!
+     Formula: days since 1899-12-30. Example: 45294 = 2024-01-02, 46024 = 2026-01-02
+     If date is already text like "2024-01-02", use as-is.
+     If no date found, use fallback: ${filenameDate || 'today\'s date'}
 - LOCATION: "${structure.locationColumn}" column
 - MATERIAL: "${structure.materialColumn}" column (use standard names from synonyms)
 - WEIGHT: "${structure.weightColumn}" column (convert to kg!)
@@ -140,7 +150,7 @@ ${tsv}
 JSON OUTPUT (no markdown, no backticks, just JSON, NO {value, confidence} wrappers):
 {"items":[{"date":"2024-01-16","location":"Address","material":"Material","weightKg":185,"unit":"Kg","receiver":"${receiver}"}]}
 
-CRITICAL: Extract ALL ${chunkRows.length} rows!`;
+CRITICAL: Extract ALL ${chunkRows.length} rows! ALWAYS output date as YYYY-MM-DD string!`;
 
   // TRY 1: Haiku (fast & cheap)
   console.log(`   🔄 Attempt 1: Using Haiku`);
