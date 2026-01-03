@@ -462,6 +462,7 @@ export async function saveDocument(formData: FormData) {
   }
   
   const existingData = existingDoc.extracted_data || {};
+  const existingLineItems = existingData.lineItems || [];
   
   // Get edited document metadata from form
   const editedDate = formData.get("date") as string;
@@ -469,7 +470,7 @@ export async function saveDocument(formData: FormData) {
   const editedAddress = formData.get("address") as string;
   const editedReceiver = formData.get("receiver") as string;
   
-  // Get lineItems from form
+  // Get lineItems from form, MERGING with existing data to preserve extra fields
   const lineItems: any[] = [];
   let index = 0;
   while (formData.get(`lineItems[${index}].material`) !== null) {
@@ -483,15 +484,22 @@ export async function saveDocument(formData: FormData) {
     const co2Saved = parseFloat(formData.get(`lineItems[${index}].co2Saved`) as string || "0");
     
     if (material || weightKg > 0) {
+      // PRESERVE: Start with original line item data (if exists) to keep extra fields
+      // like wasteCode, costSEK, referensnummer, fordon, date, unit, etc.
+      const originalItem = existingLineItems[index] || {};
+      
+      // Merge: original fields + edited fields (edited fields take priority)
       lineItems.push({
+        ...originalItem, // Keep ALL original fields (date, wasteCode, costSEK, unit, etc.)
+        // Override with edited values from form:
         material: { value: material || "", confidence: 1 },
         weightKg: { value: weightKg, confidence: 1 },
-        address: address ? { value: address, confidence: 1 } : undefined,
-        location: location ? { value: location, confidence: 1 } : undefined,
-        receiver: receiver ? { value: receiver, confidence: 1 } : undefined,
-        handling: handling ? { value: handling, confidence: 1 } : undefined,
+        address: address ? { value: address, confidence: 1 } : originalItem.address,
+        location: location ? { value: location, confidence: 1 } : originalItem.location,
+        receiver: receiver ? { value: receiver, confidence: 1 } : originalItem.receiver,
+        handling: handling ? { value: handling, confidence: 1 } : originalItem.handling,
         isHazardous: { value: isHazardous, confidence: 1 },
-        co2Saved: co2Saved > 0 ? { value: co2Saved, confidence: 1 } : undefined,
+        co2Saved: co2Saved > 0 ? { value: co2Saved, confidence: 1 } : originalItem.co2Saved,
       });
     }
     index++;

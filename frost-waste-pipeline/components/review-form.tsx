@@ -69,20 +69,32 @@ export function ReviewForm({
   };
 
   // Normalize lineItems to ensure consistent format
+  // IMPORTANT: Preserve ALL original fields, not just the ones we display in the form
   const normalizeLineItems = (items: any[]): any[] => {
-    return items.map(item => ({
-      material: normalizeValue(item.material),
-      weightKg: normalizeValue(item.weightKg),
-      location: normalizeValue(item.location || item.address), // Handle both location and address
-      address: normalizeValue(item.address || item.location), // Support both field names
-      receiver: normalizeValue(item.receiver),
-      date: normalizeValue(item.date),
-      handling: normalizeValue(item.handling),
-      isHazardous: normalizeValue(item.isHazardous),
-      co2Saved: normalizeValue(item.co2Saved || item.co2),
-      costSEK: normalizeValue(item.costSEK || item.cost),
-      unit: normalizeValue(item.unit || "Kg"),
-    }));
+    return items.map(item => {
+      // Start with ALL original fields to preserve data like wasteCode, referensnummer, fordon, etc.
+      const normalizedItem: any = {};
+      
+      // Copy ALL original fields, normalizing their format
+      for (const key of Object.keys(item)) {
+        normalizedItem[key] = normalizeValue(item[key]);
+      }
+      
+      // Ensure critical fields are properly set (with fallbacks)
+      normalizedItem.material = normalizeValue(item.material);
+      normalizedItem.weightKg = normalizeValue(item.weightKg);
+      normalizedItem.location = normalizeValue(item.location || item.address);
+      normalizedItem.address = normalizeValue(item.address || item.location);
+      normalizedItem.receiver = normalizeValue(item.receiver);
+      normalizedItem.date = normalizeValue(item.date);
+      normalizedItem.handling = normalizeValue(item.handling);
+      normalizedItem.isHazardous = normalizeValue(item.isHazardous);
+      normalizedItem.co2Saved = normalizeValue(item.co2Saved || item.co2);
+      normalizedItem.costSEK = normalizeValue(item.costSEK || item.cost);
+      normalizedItem.unit = normalizeValue(item.unit || "Kg");
+      
+      return normalizedItem;
+    });
   };
   
   // State för rader så vi kan loopa och räkna
