@@ -38,8 +38,23 @@ export async function GET(request: Request) {
 
     console.log("🔍 Auto-fetcher: Checking for failed files...");
 
+    const supabase = createServiceRoleClient();
+    
+    // Fetch folder settings from database
+    const { data: settings } = await supabase
+      .from("settings")
+      .select("azure_input_folders")
+      .eq("user_id", "default")
+      .single();
+
+    const inputFolders = settings?.azure_input_folders;
+    
+    if (inputFolders) {
+      console.log(`📁 Auto-fetcher: Using configured input folders:`, inputFolders.map((f: any) => f.folder ? `${f.container}/${f.folder}` : f.container).join(", "));
+    }
+
     const connector = new AzureBlobConnector(connectionString, containerName);
-    const failedFiles = await connector.listFailedFiles();
+    const failedFiles = await connector.listFailedFiles(inputFolders);
 
     if (failedFiles.length === 0) {
       console.log("✅ Auto-fetcher: No failed files found");

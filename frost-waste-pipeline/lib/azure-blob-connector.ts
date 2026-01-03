@@ -32,22 +32,30 @@ export class AzureBlobConnector {
   /**
    * List all files from failed containers
    * Checks containers: unable-to-process and unsupported-file-format
+   * @param customFolders - Optional array of {container, folder} to check instead of defaults
    */
-  async listFailedFiles(): Promise<FileInfo[]> {
+  async listFailedFiles(customFolders?: Array<{container: string; folder: string; enabled?: boolean}>): Promise<FileInfo[]> {
     const allFailedFiles: FileInfo[] = [];
     
-    // Check both containers
-    const failedContainers = [
-      'unable-to-process',
-      'unsupported-file-format'
-    ];
+    // Use custom folders if provided, otherwise use defaults
+    const foldersToCheck = customFolders 
+      ? customFolders.filter(f => f.enabled !== false).map(f => ({
+          container: f.container,
+          folder: f.folder || ""
+        }))
+      : [
+          { container: 'unable-to-process', folder: '' },
+          { container: 'unsupported-file-format', folder: '' }
+        ];
     
-    for (const containerName of failedContainers) {
+    for (const { container: containerName, folder } of foldersToCheck) {
       try {
         const containerClient = this.blobServiceClient.getContainerClient(containerName);
         
-        // List all blobs in this container
-        for await (const blob of containerClient.listBlobsFlat()) {
+        // List blobs - if folder is specified, use it as prefix
+        const listOptions = folder ? { prefix: folder + "/" } : {};
+        
+        for await (const blob of containerClient.listBlobsFlat(listOptions)) {
           // Skip folder markers
           if (blob.name.endsWith("/")) continue;
           
@@ -65,10 +73,12 @@ export class AzureBlobConnector {
           allFailedFiles.push(fileInfo);
         }
         
-        console.log(`✅ Found ${allFailedFiles.length} files in ${containerName}`);
+        const locationLabel = folder ? `${containerName}/${folder}` : containerName;
+        console.log(`✅ Found ${allFailedFiles.length} files in ${locationLabel}`);
         
       } catch (error) {
-        console.error(`❌ Error listing files in ${containerName}:`, error);
+        const locationLabel = folder ? `${containerName}/${folder}` : containerName;
+        console.error(`❌ Error listing files in ${locationLabel}:`, error);
         continue;
       }
     }
@@ -155,21 +165,32 @@ export class AzureBlobConnector {
   }
 
   /**
-   * Upload Excel file to "completed" container
-   * This is what was MISSING!
+   * Upload Excel file to output container/folder
+   * @param fileName - Name of the file to upload
+   * @param fileContent - File content as Buffer
+   * @param contentType - MIME type of the file
+   * @param outputPath - Optional output path (container or container/folder). Defaults to "completed"
    */
   async uploadToCompleted(
     fileName: string, 
     fileContent: Buffer,
-    contentType: string = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    contentType: string = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    outputPath?: string
   ): Promise<string> {
-    const OUTPUT_CONTAINER = "completed";
-    const containerClient = this.blobServiceClient.getContainerClient(OUTPUT_CONTAINER);
+    // Parse output path - can be "container" or "container/folder"
+    const pathToUse = outputPath || "completed";
+    const pathParts = pathToUse.split("/");
+    const containerName = pathParts[0];
+    const folderPath = pathParts.slice(1).join("/");
+    
+    const containerClient = this.blobServiceClient.getContainerClient(containerName);
     
     // Ensure container exists
     await containerClient.createIfNotExists();
 
-    const blockBlobClient = containerClient.getBlockBlobClient(fileName);
+    // Build full blob path
+    const blobPath = folderPath ? `${folderPath}/${fileName}` : fileName;
+    const blockBlobClient = containerClient.getBlockBlobClient(blobPath);
     
     // Convert Buffer to Uint8Array for upload
     const uint8Array = new Uint8Array(fileContent);
@@ -180,7 +201,7 @@ export class AzureBlobConnector {
       }
     });
 
-    console.log(`✅ Uploaded to Azure: ${OUTPUT_CONTAINER}/${fileName}`);
+    console.log(`✅ Uploaded to Azure: ${containerName}/${blobPath}`);
     
     return blockBlobClient.url;
   }

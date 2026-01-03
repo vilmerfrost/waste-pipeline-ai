@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { 
   ArrowLeft, 
@@ -11,8 +11,21 @@ import {
   Plus,
   X,
   Save,
-  AlertCircle
+  AlertCircle,
+  RefreshCw,
+  FolderOpen,
+  FolderInput,
+  FolderOutput,
+  Check,
+  ChevronDown,
+  ChevronRight
 } from "lucide-react";
+
+interface AzureInputFolder {
+  container: string;
+  folder: string;
+  enabled: boolean;
+}
 
 interface Settings {
   auto_approve_threshold: number;
@@ -20,6 +33,20 @@ interface Settings {
   material_synonyms: Record<string, string[]>;
   enable_verification: boolean;
   verification_confidence_threshold: number;
+  azure_input_folders: AzureInputFolder[];
+  azure_output_folder: string;
+}
+
+interface FolderInfo {
+  name: string;
+  path: string;
+  fileCount: number;
+}
+
+interface ContainerInfo {
+  name: string;
+  folders: FolderInfo[];
+  rootFileCount: number;
 }
 
 export default function SettingsPage() {
@@ -37,6 +64,14 @@ export default function SettingsPage() {
   // Verification settings
   const [enableVerification, setEnableVerification] = useState(false);
   const [verificationThreshold, setVerificationThreshold] = useState(85);
+
+  // Azure folder settings
+  const [azureContainers, setAzureContainers] = useState<ContainerInfo[]>([]);
+  const [loadingContainers, setLoadingContainers] = useState(false);
+  const [inputFolders, setInputFolders] = useState<AzureInputFolder[]>([]);
+  const [outputFolder, setOutputFolder] = useState("completed");
+  const [expandedContainers, setExpandedContainers] = useState<Set<string>>(new Set());
+  const [showFolderPicker, setShowFolderPicker] = useState<'input' | 'output' | null>(null);
 
   // Active sidebar item
   const [activeSection, setActiveSection] = useState("material");
@@ -57,11 +92,99 @@ export default function SettingsPage() {
         setSynonyms(data.settings.material_synonyms);
         setEnableVerification(data.settings.enable_verification ?? false);
         setVerificationThreshold((data.settings.verification_confidence_threshold ?? 0.85) * 100);
+        setInputFolders(data.settings.azure_input_folders ?? []);
+        setOutputFolder(data.settings.azure_output_folder ?? "completed");
       }
     } catch (error) {
       console.error("Failed to fetch settings:", error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchAzureContainers = useCallback(async () => {
+    setLoadingContainers(true);
+    try {
+      const response = await fetch("/api/azure/browse");
+      const data = await response.json();
+      
+      if (data.success) {
+        setAzureContainers(data.containers);
+      } else {
+        setMessage({ type: 'error', text: data.error || "Kunde inte hämta Azure-mappar" });
+        setTimeout(() => setMessage(null), 3000);
+      }
+    } catch (error) {
+      console.error("Failed to fetch Azure containers:", error);
+      setMessage({ type: 'error', text: "Kunde inte ansluta till Azure" });
+      setTimeout(() => setMessage(null), 3000);
+    } finally {
+      setLoadingContainers(false);
+    }
+  }, []);
+
+  const toggleContainer = (containerName: string) => {
+    setExpandedContainers(prev => {
+      const next = new Set(prev);
+      if (next.has(containerName)) {
+        next.delete(containerName);
+      } else {
+        next.add(containerName);
+      }
+      return next;
+    });
+  };
+
+  const addInputFolder = (container: string, folder: string = "") => {
+    const newFolder: AzureInputFolder = { container, folder, enabled: true };
+    // Check if already exists
+    const exists = inputFolders.some(f => f.container === container && f.folder === folder);
+    if (!exists) {
+      setInputFolders([...inputFolders, newFolder]);
+    }
+    setShowFolderPicker(null);
+  };
+
+  const removeInputFolder = (index: number) => {
+    setInputFolders(inputFolders.filter((_, i) => i !== index));
+  };
+
+  const toggleInputFolder = (index: number) => {
+    setInputFolders(inputFolders.map((f, i) => 
+      i === index ? { ...f, enabled: !f.enabled } : f
+    ));
+  };
+
+  const selectOutputFolder = (container: string, folder: string = "") => {
+    const path = folder ? `${container}/${folder}` : container;
+    setOutputFolder(path);
+    setShowFolderPicker(null);
+  };
+
+  const saveAzureFolderSettings = async () => {
+    setSaving(true);
+    try {
+      const response = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          azure_input_folders: inputFolders,
+          azure_output_folder: outputFolder
+        })
+      });
+
+      const data = await response.json();
+      
+      if (data.success) {
+        setMessage({ type: 'success', text: "Azure-mappinställningar sparade!" });
+        setTimeout(() => setMessage(null), 3000);
+      } else {
+        setMessage({ type: 'error', text: data.error });
+      }
+    } catch (error) {
+      setMessage({ type: 'error', text: "Kunde inte spara inställningar" });
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -728,70 +851,275 @@ export default function SettingsPage() {
 
             {/* Azure & GUIDs Section */}
             {activeSection === "azure" && (
-              <div className="bg-white rounded-lg border border-gray-200 p-6">
-                <h2 className="text-xl font-bold text-gray-900 mb-2">
-                  Azure & GUIDs
-                </h2>
-                <p className="text-sm text-gray-600 mb-6">
-                  Hantera Azure-integration och GUID-inställningar.
-                </p>
-                
-                <div className="space-y-6">
-                  {/* Azure Connection Status */}
-                  <div>
-                    <h3 className="font-semibold text-gray-900 mb-3">Azure Blob Storage</h3>
-                    <div className="space-y-3">
-                      <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
-                        <div className="flex items-center justify-between mb-2">
-                          <p className="font-medium text-gray-900">Input Container</p>
-                          <span className="px-3 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded-full">
-                            ANSLUTEN
-                          </span>
-                        </div>
-                        <p className="text-sm text-gray-600 font-mono">unsupported-file-format</p>
-                      </div>
-                      
-                      <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
-                        <div className="flex items-center justify-between mb-2">
-                          <p className="font-medium text-gray-900">Output Container</p>
-                          <span className="px-3 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded-full">
-                            ANSLUTEN
-                          </span>
-                        </div>
-                        <p className="text-sm text-gray-600 font-mono">completed</p>
-                      </div>
+              <div className="space-y-6">
+                {/* Folder Configuration */}
+                <div className="bg-white rounded-lg border border-gray-200 p-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h2 className="text-xl font-bold text-gray-900 mb-2">
+                        Azure Mappar
+                      </h2>
+                      <p className="text-sm text-gray-600">
+                        Välj vilka mappar som ska övervakas för inkommande filer och var bearbetade filer ska sparas.
+                      </p>
                     </div>
+                    <button
+                      onClick={fetchAzureContainers}
+                      disabled={loadingContainers}
+                      className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-4 h-4 ${loadingContainers ? 'animate-spin' : ''}`} />
+                      {loadingContainers ? 'Laddar...' : 'Hämta mappar'}
+                    </button>
                   </div>
 
-                  {/* Auto-sync */}
-                  <div>
-                    <h3 className="font-semibold text-gray-900 mb-3">Automatisk synkronisering</h3>
-                    <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
-                      <div className="flex items-center gap-2 text-green-700">
-                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                        </svg>
-                        <p className="text-sm font-medium">
-                          Synkar nya filer var 5:e minut
+                  {/* Input Folders */}
+                  <div className="mb-6">
+                    <div className="flex items-center gap-2 mb-3">
+                      <FolderInput className="w-5 h-5 text-blue-600" />
+                      <h3 className="font-semibold text-gray-900">Inkommande mappar</h3>
+                      <span className="text-xs text-gray-500">(en eller flera)</span>
+                    </div>
+                    
+                    {/* Selected input folders */}
+                    <div className="space-y-2 mb-3">
+                      {inputFolders.length === 0 ? (
+                        <p className="text-sm text-gray-500 italic p-3 bg-gray-50 rounded-lg">
+                          Inga inkommande mappar konfigurerade
                         </p>
-                      </div>
-                      <p className="text-xs text-green-600 mt-2">
-                        Systemet kollar automatiskt efter nya dokument i "unsupported-file-format"
-                      </p>
+                      ) : (
+                        inputFolders.map((folder, index) => (
+                          <div 
+                            key={`${folder.container}-${folder.folder}-${index}`}
+                            className={`flex items-center justify-between p-3 rounded-lg border ${
+                              folder.enabled 
+                                ? 'bg-blue-50 border-blue-200' 
+                                : 'bg-gray-50 border-gray-200 opacity-60'
+                            }`}
+                          >
+                            <div className="flex items-center gap-3">
+                              <button
+                                onClick={() => toggleInputFolder(index)}
+                                className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+                                  folder.enabled 
+                                    ? 'bg-blue-600 border-blue-600 text-white' 
+                                    : 'border-gray-300 bg-white'
+                                }`}
+                              >
+                                {folder.enabled && <Check className="w-3 h-3" />}
+                              </button>
+                              <div>
+                                <p className="font-medium text-gray-900 font-mono text-sm">
+                                  {folder.folder ? `${folder.container}/${folder.folder}` : folder.container}
+                                </p>
+                                <p className="text-xs text-gray-500">
+                                  {folder.enabled ? 'Aktiv' : 'Pausad'}
+                                </p>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => removeInputFolder(index)}
+                              className="p-1 hover:bg-red-100 rounded text-gray-400 hover:text-red-600 transition-colors"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ))
+                      )}
                     </div>
+
+                    {/* Add input folder button */}
+                    <button
+                      onClick={() => {
+                        if (azureContainers.length === 0) {
+                          fetchAzureContainers();
+                        }
+                        setShowFolderPicker(showFolderPicker === 'input' ? null : 'input');
+                      }}
+                      className="flex items-center gap-2 px-4 py-2 border-2 border-dashed border-gray-300 hover:border-blue-400 rounded-lg text-sm text-gray-600 hover:text-blue-600 transition-colors w-full justify-center"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Lägg till inkommande mapp
+                    </button>
+
+                    {/* Folder picker for input */}
+                    {showFolderPicker === 'input' && azureContainers.length > 0 && (
+                      <div className="mt-3 p-4 bg-gray-50 rounded-lg border border-gray-200 max-h-80 overflow-y-auto">
+                        <p className="text-xs text-gray-500 mb-3">Välj container eller mapp att övervaka:</p>
+                        {azureContainers.map(container => (
+                          <div key={container.name} className="mb-2">
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => toggleContainer(container.name)}
+                                className="p-1 hover:bg-gray-200 rounded"
+                              >
+                                {expandedContainers.has(container.name) 
+                                  ? <ChevronDown className="w-4 h-4 text-gray-500" />
+                                  : <ChevronRight className="w-4 h-4 text-gray-500" />
+                                }
+                              </button>
+                              <button
+                                onClick={() => addInputFolder(container.name)}
+                                className="flex-1 flex items-center gap-2 p-2 hover:bg-blue-100 rounded-lg text-left transition-colors"
+                              >
+                                <FolderOpen className="w-4 h-4 text-yellow-600" />
+                                <span className="font-medium text-gray-900">{container.name}</span>
+                                <span className="text-xs text-gray-500">
+                                  ({container.rootFileCount} filer i rot{container.folders.length > 0 && `, ${container.folders.length} mappar`})
+                                </span>
+                              </button>
+                            </div>
+                            
+                            {/* Sub-folders */}
+                            {expandedContainers.has(container.name) && container.folders.length > 0 && (
+                              <div className="ml-8 mt-1 space-y-1">
+                                {container.folders.map(folder => (
+                                  <button
+                                    key={folder.path}
+                                    onClick={() => addInputFolder(container.name, folder.name)}
+                                    className="flex items-center gap-2 p-2 hover:bg-blue-100 rounded-lg text-left transition-colors w-full"
+                                  >
+                                    <FolderOpen className="w-4 h-4 text-blue-500" />
+                                    <span className="text-gray-700">{folder.name}</span>
+                                    <span className="text-xs text-gray-500">({folder.fileCount} filer)</span>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
-                  {/* Filename Format */}
-                  <div>
-                    <h3 className="font-semibold text-gray-900 mb-3">Filnamnhantering</h3>
-                    <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
-                      <p className="text-sm text-gray-600 mb-2">
-                        Systemet hanterar automatiskt UUID-baserade filnamn från Azure och extraherar datum från filnamn.
-                      </p>
-                      <p className="text-xs text-gray-500 font-mono">
-                        Format: [uuid]_[timestamp]_[datum].pdf
+                  {/* Output Folder */}
+                  <div className="mb-6">
+                    <div className="flex items-center gap-2 mb-3">
+                      <FolderOutput className="w-5 h-5 text-green-600" />
+                      <h3 className="font-semibold text-gray-900">Målmapp (bearbetade filer)</h3>
+                      <span className="text-xs text-gray-500">(en)</span>
+                    </div>
+                    
+                    {/* Selected output folder */}
+                    <div className="p-3 bg-green-50 border border-green-200 rounded-lg mb-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <Check className="w-5 h-5 text-green-600" />
+                          <div>
+                            <p className="font-medium text-gray-900 font-mono text-sm">
+                              {outputFolder}
+                            </p>
+                            <p className="text-xs text-gray-500">Bearbetade filer sparas här</p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => {
+                            if (azureContainers.length === 0) {
+                              fetchAzureContainers();
+                            }
+                            setShowFolderPicker(showFolderPicker === 'output' ? null : 'output');
+                          }}
+                          className="px-3 py-1.5 text-sm text-green-700 hover:bg-green-100 rounded-lg transition-colors"
+                        >
+                          Ändra
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Folder picker for output */}
+                    {showFolderPicker === 'output' && azureContainers.length > 0 && (
+                      <div className="mt-3 p-4 bg-gray-50 rounded-lg border border-gray-200 max-h-80 overflow-y-auto">
+                        <p className="text-xs text-gray-500 mb-3">Välj container eller mapp för bearbetade filer:</p>
+                        {azureContainers.map(container => (
+                          <div key={container.name} className="mb-2">
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => toggleContainer(container.name)}
+                                className="p-1 hover:bg-gray-200 rounded"
+                              >
+                                {expandedContainers.has(container.name) 
+                                  ? <ChevronDown className="w-4 h-4 text-gray-500" />
+                                  : <ChevronRight className="w-4 h-4 text-gray-500" />
+                                }
+                              </button>
+                              <button
+                                onClick={() => selectOutputFolder(container.name)}
+                                className={`flex-1 flex items-center gap-2 p-2 hover:bg-green-100 rounded-lg text-left transition-colors ${
+                                  outputFolder === container.name ? 'bg-green-100' : ''
+                                }`}
+                              >
+                                <FolderOpen className="w-4 h-4 text-yellow-600" />
+                                <span className="font-medium text-gray-900">{container.name}</span>
+                                {outputFolder === container.name && (
+                                  <Check className="w-4 h-4 text-green-600 ml-auto" />
+                                )}
+                              </button>
+                            </div>
+                            
+                            {/* Sub-folders */}
+                            {expandedContainers.has(container.name) && container.folders.length > 0 && (
+                              <div className="ml-8 mt-1 space-y-1">
+                                {container.folders.map(folder => (
+                                  <button
+                                    key={folder.path}
+                                    onClick={() => selectOutputFolder(container.name, folder.name)}
+                                    className={`flex items-center gap-2 p-2 hover:bg-green-100 rounded-lg text-left transition-colors w-full ${
+                                      outputFolder === folder.path ? 'bg-green-100' : ''
+                                    }`}
+                                  >
+                                    <FolderOpen className="w-4 h-4 text-blue-500" />
+                                    <span className="text-gray-700">{folder.name}</span>
+                                    {outputFolder === folder.path && (
+                                      <Check className="w-4 h-4 text-green-600 ml-auto" />
+                                    )}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Save button */}
+                  <button
+                    onClick={saveAzureFolderSettings}
+                    disabled={saving}
+                    className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors disabled:opacity-50"
+                  >
+                    {saving ? "Sparar..." : "Spara mappinställningar"}
+                  </button>
+                </div>
+
+                {/* Auto-sync info */}
+                <div className="bg-white rounded-lg border border-gray-200 p-6">
+                  <h3 className="font-semibold text-gray-900 mb-3">Automatisk synkronisering</h3>
+                  <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+                    <div className="flex items-center gap-2 text-green-700">
+                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                      <p className="text-sm font-medium">
+                        Synkar nya filer var 5:e minut
                       </p>
                     </div>
+                    <p className="text-xs text-green-600 mt-2">
+                      Systemet kollar automatiskt efter nya dokument i de valda inkommande mapparna
+                    </p>
+                  </div>
+                </div>
+
+                {/* Filename Format info */}
+                <div className="bg-white rounded-lg border border-gray-200 p-6">
+                  <h3 className="font-semibold text-gray-900 mb-3">Filnamnhantering</h3>
+                  <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                    <p className="text-sm text-gray-600 mb-2">
+                      Systemet hanterar automatiskt UUID-baserade filnamn från Azure och extraherar datum från filnamn.
+                    </p>
+                    <p className="text-xs text-gray-500 font-mono">
+                      Format: [uuid]_[timestamp]_[datum].pdf
+                    </p>
                   </div>
                 </div>
               </div>

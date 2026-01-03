@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { AzureBlobConnector } from "@/lib/azure-blob-connector";
+import { createServiceRoleClient } from "@/lib/supabase";
 
 export async function GET() {
   try {
@@ -13,13 +14,24 @@ export async function GET() {
       );
     }
 
+    // Fetch folder settings from database
+    const supabase = createServiceRoleClient();
+    const { data: settings } = await supabase
+      .from("settings")
+      .select("azure_input_folders")
+      .eq("user_id", "default")
+      .single();
+
+    const inputFolders = settings?.azure_input_folders;
+
     const connector = new AzureBlobConnector(connectionString, containerName);
-    const files = await connector.listFailedFiles();
+    const files = await connector.listFailedFiles(inputFolders);
 
     return NextResponse.json({
       success: true,
       files,
       count: files.length,
+      inputFolders: inputFolders || "default",
     });
   } catch (error: any) {
     console.error("Error listing failed files:", error);

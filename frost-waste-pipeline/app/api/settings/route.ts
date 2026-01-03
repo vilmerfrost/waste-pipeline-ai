@@ -1,6 +1,24 @@
 import { NextResponse } from "next/server";
 import { createServiceRoleClient } from "@/lib/supabase";
 
+// Default settings
+const DEFAULT_SETTINGS = {
+  auto_approve_threshold: 80,
+  enterprise_auto_approve: false,
+  material_synonyms: {
+    "Trä": ["Brädor", "Virke", "Lastpall", "Spont"],
+    "Gips": ["Gipsskivor", "Rivningsgips", "Gipsspill"],
+    "Betong": ["Armerad betong", "Betongkross"],
+    "Brännbart": ["Restavfall", "Blandat brännbart"]
+  },
+  // Verification settings (anti-hallucination)
+  enable_verification: false, // Off by default to save API costs
+  verification_confidence_threshold: 0.85, // Verify if extraction confidence < 85%
+  // Azure folder settings
+  azure_input_folders: [{ container: "unsupported-file-format", folder: "", enabled: true }],
+  azure_output_folder: "completed"
+};
+
 // GET /api/settings - Fetch current settings
 export async function GET() {
   const supabase = createServiceRoleClient();
@@ -16,18 +34,9 @@ export async function GET() {
 
     return NextResponse.json({
       success: true,
-      settings: settings || {
-        auto_approve_threshold: 80,
-        enterprise_auto_approve: false,
-        material_synonyms: {
-          "Trä": ["Brädor", "Virke", "Lastpall", "Spont"],
-          "Gips": ["Gipsskivor", "Rivningsgips", "Gipsspill"],
-          "Betong": ["Armerad betong", "Betongkross"],
-          "Brännbart": ["Restavfall", "Blandat brännbart"]
-        },
-        // Verification settings (anti-hallucination)
-        enable_verification: false, // Off by default to save API costs
-        verification_confidence_threshold: 0.85 // Verify if extraction confidence < 85%
+      settings: {
+        ...DEFAULT_SETTINGS,
+        ...settings
       }
     });
   } catch (error: any) {
@@ -49,7 +58,9 @@ export async function POST(request: Request) {
       enterprise_auto_approve, 
       material_synonyms,
       enable_verification,
-      verification_confidence_threshold
+      verification_confidence_threshold,
+      azure_input_folders,
+      azure_output_folder
     } = body;
 
     // Validate threshold
@@ -72,6 +83,16 @@ export async function POST(request: Request) {
       }
     }
 
+    // Validate azure_input_folders if provided
+    if (azure_input_folders !== undefined) {
+      if (!Array.isArray(azure_input_folders)) {
+        return NextResponse.json(
+          { success: false, error: "azure_input_folders must be an array" },
+          { status: 400 }
+        );
+      }
+    }
+
     // Update settings
     const { data, error } = await supabase
       .from("settings")
@@ -80,7 +101,9 @@ export async function POST(request: Request) {
         ...(enterprise_auto_approve !== undefined && { enterprise_auto_approve }),
         ...(material_synonyms !== undefined && { material_synonyms }),
         ...(enable_verification !== undefined && { enable_verification }),
-        ...(verification_confidence_threshold !== undefined && { verification_confidence_threshold })
+        ...(verification_confidence_threshold !== undefined && { verification_confidence_threshold }),
+        ...(azure_input_folders !== undefined && { azure_input_folders }),
+        ...(azure_output_folder !== undefined && { azure_output_folder })
       })
       .eq("user_id", "default")
       .select()

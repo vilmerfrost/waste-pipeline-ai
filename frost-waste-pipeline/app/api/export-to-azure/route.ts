@@ -227,6 +227,20 @@ export async function POST(request: NextRequest) {
     
     console.log(`✓ Found ${documents.length} documents to export`);
     
+    // Fetch output folder setting
+    const { data: settings } = await supabase
+      .from("settings")
+      .select("azure_output_folder")
+      .eq("user_id", "default")
+      .single();
+    
+    const outputPath = settings?.azure_output_folder || "completed";
+    const outputParts = outputPath.split("/");
+    const outputContainer = outputParts[0];
+    const outputFolderPrefix = outputParts.slice(1).join("/");
+    
+    console.log(`📁 Output destination: ${outputPath}`);
+    
     // Azure setup
     const connectionString = process.env.AZURE_STORAGE_CONNECTION_STRING;
     
@@ -235,7 +249,7 @@ export async function POST(request: NextRequest) {
     }
     
     const blobServiceClient = BlobServiceClient.fromConnectionString(connectionString);
-    const containerClient = blobServiceClient.getContainerClient("completed");
+    const containerClient = blobServiceClient.getContainerClient(outputContainer);
     
     // Ensure container exists
     await containerClient.createIfNotExists();
@@ -255,10 +269,15 @@ export async function POST(request: NextRequest) {
         // Use original filename (change .pdf to .xlsx if needed)
         const exportFilename = getExportFilename(doc.filename);
         
-        console.log(`   Export as: ${exportFilename}`);
+        // Build full blob path with optional folder prefix
+        const blobPath = outputFolderPrefix 
+          ? `${outputFolderPrefix}/${exportFilename}` 
+          : exportFilename;
+        
+        console.log(`   Export as: ${blobPath}`);
         
         // Upload to Azure
-        const blockBlobClient = containerClient.getBlockBlobClient(exportFilename);
+        const blockBlobClient = containerClient.getBlockBlobClient(blobPath);
         
         // Convert buffer to Uint8Array for Azure
         const uint8Array = new Uint8Array(buffer as ArrayBuffer);
