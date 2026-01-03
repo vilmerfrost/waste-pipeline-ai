@@ -39,13 +39,13 @@ export async function POST() {
 
     console.log(`📦 Manual auto-fetch: Found ${failedFiles.length} failed files`);
 
-    const supabase = createServiceRoleClient();
+    const supabasedbclient = createServiceRoleClient();
     const results = {
       total: failedFiles.length,
       processed: 0,
       errors: 0,
       files: [] as any[],
-    };
+    };    
 
     // Process each file
     for (const fileInfo of failedFiles) {
@@ -58,7 +58,7 @@ export async function POST() {
         // Upload to Supabase storage
         const sanitizedName = sanitizeFilename(fileInfo.name);
         const storagePath = `azure-auto-fetch/${Date.now()}-${sanitizedName}`;
-        const { error: uploadError } = await supabase.storage
+        const { error: uploadError } = await supabasedbclient.storage
           .from("raw_documents")
           .upload(storagePath, buffer, {
             contentType: fileInfo.content_type || "application/pdf",
@@ -72,7 +72,7 @@ export async function POST() {
         }
 
         // Create document record with Azure filename tracking
-        const { data: doc, error: docError } = await supabase
+        const { data: doc, error: docError } = await supabasedbclient
           .from("documents")
           .insert({
             filename: fileInfo.name,
@@ -97,7 +97,7 @@ export async function POST() {
         }
 
         // Enqueue for processing
-        await supabase.from("processing_jobs").insert({
+        await supabasedbclient.from("processing_jobs").insert({
           document_id: doc.id,
           status: "queued",
         });
