@@ -249,14 +249,14 @@ export default async function ReviewPage({
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <div className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-6 py-6">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
           {/* Breadcrumbs */}
           <Breadcrumbs 
             items={getReviewBreadcrumbs(doc.id, doc.filename)} 
             className="mb-4" 
           />
           
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
             <Link
               href="/collecct"
               className="flex items-center gap-2 px-4 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
@@ -307,7 +307,7 @@ export default async function ReviewPage({
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-6 py-8">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
         {/* AI SUMMARY */}
         <div className={`mb-6 p-4 rounded-lg border ${
           aiSummary.startsWith('✓') 
@@ -396,7 +396,7 @@ export default async function ReviewPage({
 
         {/* COLUMN LEGEND */}
         <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-          <div className="flex items-start justify-between">
+          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
             <div>
               <h3 className="font-semibold text-blue-900 mb-2">
                 Kolumner ({allColumns.length})
@@ -449,7 +449,7 @@ export default async function ReviewPage({
                 </div>
               )}
             </div>
-            <div className="text-xs text-blue-700 ml-4">
+            <div className="text-xs text-blue-700 lg:ml-4">
               <div className="font-semibold mb-1">Legend:</div>
               <div className="flex items-center gap-2 mb-1">
                 <span className="inline-block w-3 h-3 bg-blue-600 rounded-full"></span>
@@ -483,37 +483,25 @@ export default async function ReviewPage({
           )}
         </div>
 
-        {/* MAIN CONTENT GRID */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-6">
-          {/* Left: Document Preview */}
-          <div className="space-y-4">
-            <div className="bg-white rounded-lg border border-gray-200 p-6">
-              <h2 className="text-lg font-semibold mb-4">Förhandsvisning</h2>
-              {signedUrl ? (
-                isExcel ? (
-                  <ExcelViewer url={signedUrl} />
-                ) : (
-                  <iframe 
-                    src={signedUrl} 
-                    className="w-full h-full min-h-[600px] rounded border border-gray-200" 
-                    title="PDF Viewer" 
-                  />
-                )
+        {/* Left: Document Preview */}
+        <div className="mb-6">
+          <div className="bg-white rounded-lg border border-gray-200 p-6">
+            <h2 className="text-lg font-semibold mb-4">Förhandsvisning</h2>
+            {signedUrl ? (
+              isExcel ? (
+                <ExcelViewer url={signedUrl} />
               ) : (
-                <div className="text-center py-8 text-gray-500">
-                  Förhandsvisning inte tillgänglig
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Right: Review Form */}
-          <div className="space-y-4">
-            <ReviewForm
-              initialData={extractedData}
-              documentId={doc.id}
-              nextDocId={nextDocId}
-            />
+                <iframe 
+                  src={signedUrl} 
+                  className="w-full h-full min-h-[600px] rounded border border-gray-200" 
+                  title="PDF Viewer" 
+                />
+              )
+            ) : (
+              <div className="text-center py-8 text-gray-500">
+                Förhandsvisning inte tillgänglig
+              </div>
+            )}
           </div>
         </div>
 
@@ -582,6 +570,34 @@ export default async function ReviewPage({
             </ul>
           </div>
         )}
+
+        {/* RAW EXTRACTED DATA TABLE */}
+        {lineItems.length > 0 && (
+          <div className="mb-6">
+            <div className="flex items-center gap-3 mb-4">
+              <h2 className="text-xl font-semibold text-gray-900">Extraherad Data (Rådata från AI)</h2>
+              <span className="px-3 py-1 bg-gray-100 text-gray-600 text-sm rounded-full">
+                {lineItems.length} rader extraherade
+              </span>
+            </div>
+            <p className="text-sm text-gray-500 mb-4">
+              Rå data som AI:n extraherade. Fält med "SAKNAS" fylls i med fallback-värden vid export.
+            </p>
+            <PaginatedTable 
+              lineItems={lineItems}
+              columns={allColumns}
+            />
+          </div>
+        )}
+
+        {/* Right: Review Form */}
+        <div className="mb-6">
+          <ReviewForm
+            initialData={extractedData}
+            documentId={doc.id}
+            nextDocId={nextDocId}
+          />
+        </div>
 
         {/* === EXPORT PREVIEW === */}
         {/* Shows EXACTLY what will be in the Excel file uploaded to Azure */}
@@ -673,25 +689,6 @@ export default async function ReviewPage({
                 </div>
               </div>
             </div>
-          </div>
-        )}
-
-        {/* RAW EXTRACTED DATA TABLE */}
-        {lineItems.length > 0 && (
-          <div className="mb-6">
-            <div className="flex items-center gap-3 mb-4">
-              <h2 className="text-xl font-semibold text-gray-900">Extraherad Data (Rådata från AI)</h2>
-              <span className="px-3 py-1 bg-gray-100 text-gray-600 text-sm rounded-full">
-                {lineItems.length} rader extraherade
-              </span>
-            </div>
-            <p className="text-sm text-gray-500 mb-4">
-              Rå data som AI:n extraherade. Fält med "SAKNAS" fylls i med fallback-värden vid export.
-            </p>
-            <PaginatedTable 
-              lineItems={lineItems}
-              columns={allColumns}
-            />
           </div>
         )}
       </div>

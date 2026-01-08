@@ -297,12 +297,18 @@ export function ReviewForm({
       setShowSuccess(true);
       setTimeout(() => setShowSuccess(false), 3000);
       
-      // Navigate to next document if requested
-      if (goToNext && nextDocId) {
-        router.push(`/review/${nextDocId}`);
-      } else if (goToNext && !nextDocId) {
-        // No more documents to review, go back to dashboard
-        router.push('/collecct');
+      // Handle navigation based on button clicked
+      if (goToNext) {
+        // "Spara & Nästa" - navigate to next document or dashboard
+        if (nextDocId) {
+          router.push(`/review/${nextDocId}`);
+        } else {
+          // No more documents to review, go back to dashboard
+          router.push('/collecct');
+        }
+      } else {
+        // "Spara" - stay on same page, refresh to show updated data
+        router.refresh();
       }
       
     } catch (error) {
@@ -355,7 +361,7 @@ export function ReviewForm({
           </div>
         )}
         
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {/* Datum - EDITABLE */}
           <div>
             <label className="block text-sm font-semibold text-slate-800 mb-1.5">
@@ -393,7 +399,7 @@ export function ReviewForm({
         <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">
           Totaler (Live)
         </h3>
-        <div className="grid grid-cols-3 gap-4 bg-gray-50 p-4 rounded-lg">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-gray-50 p-4 rounded-lg">
           <div>
             <div className="text-xs text-gray-500 mb-1">CO2 Besparing</div>
             <div className="text-xl font-bold text-green-600">
@@ -419,7 +425,7 @@ export function ReviewForm({
         <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">
           Hämtadress (Huvud)
         </h3>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {/* Projektadress - EDITABLE */}
           <div>
             <label className="block text-sm font-semibold text-slate-800 mb-1.5">

@@ -306,8 +306,9 @@ async function processDocument(documentId: string) {
 /**
  * RE-VERIFY DOCUMENT (AI Dubbelkoll)
  * Reruns AI extraction on an existing document
+ * @param customInstructions - Optional extra instructions from user to guide the AI
  */
-export async function reVerifyDocument(documentId: string) {
+export async function reVerifyDocument(documentId: string, customInstructions?: string) {
   const supabase = createServiceRoleClient();
   const { data: doc } = await supabase.from("documents").select("*").eq("id", documentId).single();
   if (!doc) throw new Error("Dokument hittades inte");
@@ -378,7 +379,10 @@ export async function reVerifyDocument(documentId: string) {
               2. Extrahera rader från SMAKPROVET. Returnera MAX 15 RADER i JSON. Försök inte returnera hela filen.
               3. Farligt avfall: Sätt "isHazardous": true om det är elektronik, kemikalier, asbest etc.
               4. Adress per rad: Om tabellen har kolumner som "Hämtställe", "Littera" eller "Projekt", extrahera dessa per rad.
-
+${customInstructions ? `
+              EXTRA INSTRUKTIONER FRÅN ANVÄNDAREN (HÖGSTA PRIORITET):
+              ${customInstructions}
+` : ''}
               JSON OUTPUT:
               {
                 "date": { "value": "YYYY-MM-DD", "confidence": Number },
@@ -550,20 +554,8 @@ export async function saveDocument(formData: FormData) {
   revalidatePath("/collecct");
   revalidatePath(`/review/${id}`);
   
-  // HITTA NÄSTA DOKUMENT ATT GRANSKA (Spara & Nästa) ⏭️
-  const { data: nextDoc } = await supabase
-    .from("documents")
-    .select("id")
-    .eq("status", "needs_review")
-    .neq("id", id) // Inte det vi just sparade
-    .limit(1)
-    .single();
-
-  if (nextDoc) {
-    redirect(`/review/${nextDoc.id}`);
-  } else {
-    redirect("/collecct");
-  }
+  // Return success - let the client handle navigation
+  return { success: true, documentId: id };
 }
 // (Behåll övriga exporterade funktioner)
 export async function deleteDocument(formData: FormData) {
