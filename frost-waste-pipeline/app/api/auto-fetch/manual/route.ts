@@ -24,22 +24,65 @@ export async function POST() {
       );
     }
 
-    console.log("🔍 Manual auto-fetch: Checking for failed files...");
+    console.log("\n" + "=".repeat(60));
+    console.log("🔍 MANUAL SYNC: Starting Azure file fetch...");
+    console.log("=".repeat(60));
 
-    const connector = new AzureBlobConnector(connectionString, containerName);
-    const failedFiles = await connector.listFailedFiles();
+    const supabasedbclient = createServiceRoleClient();
+    
+    // Fetch folder settings from database
+    const { data: settings, error: settingsError } = await supabasedbclient
+      .from("settings")
+      .select("azure_input_folders")
+      .eq("user_id", "default")
+      .single();
 
-    if (failedFiles.length === 0) {
+    if (settingsError) {
+      console.warn(`⚠️ Could not fetch settings: ${settingsError.message}`);
+    }
+
+    const inputFolders = settings?.azure_input_folders;
+    
+    if (inputFolders && Array.isArray(inputFolders) && inputFolders.length > 0) {
+      const enabledFolders = inputFolders.filter((f: any) => f.enabled !== false);
+      console.log(`\n📁 Configured input folders (${enabledFolders.length} enabled):`);
+      enabledFolders.forEach((f: any, i: number) => {
+        const path = f.folder ? `${f.container}/${f.folder}` : f.container;
+        console.log(`   ${i + 1}. ${path}`);
+      });
+    } else {
+      console.log("\n⚠️ No input folders configured!");
+      console.log("   Please configure folders in Settings → Azure & GUIDs");
       return NextResponse.json({
-        success: true,
-        message: "No failed files found",
+        success: false,
+        error: "No input folders configured. Please configure folders in Settings → Azure & GUIDs.",
         processed: 0,
       });
     }
 
-    console.log(`📦 Manual auto-fetch: Found ${failedFiles.length} failed files`);
+    console.log("\n🔎 Scanning for files...");
+    const connector = new AzureBlobConnector(connectionString, containerName);
+    const failedFiles = await connector.listFailedFiles(inputFolders);
 
-    const supabasedbclient = createServiceRoleClient();
+    if (failedFiles.length === 0) {
+      console.log("\n" + "=".repeat(60));
+      console.log("✅ MANUAL SYNC: Complete - No files to process");
+      console.log("=".repeat(60) + "\n");
+      return NextResponse.json({
+        success: true,
+        message: "No files found in configured folders",
+        processed: 0,
+      });
+    }
+
+    console.log(`\n📦 Found ${failedFiles.length} file(s) to process:`);
+    failedFiles.slice(0, 10).forEach((f, i) => {
+      console.log(`   ${i + 1}. ${f.name} (${(f.size / 1024).toFixed(1)} KB)`);
+    });
+    if (failedFiles.length > 10) {
+      console.log(`   ... and ${failedFiles.length - 10} more`);
+    }
+    console.log("");
     const results = {
       total: failedFiles.length,
       processed: 0,
@@ -121,13 +164,23 @@ export async function POST() {
       }
     }
 
+    console.log("\n" + "=".repeat(60));
+    console.log(`✅ MANUAL SYNC: Complete`);
+    console.log(`   📊 Total files: ${results.total}`);
+    console.log(`   ✅ Processed: ${results.processed}`);
+    console.log(`   ❌ Errors: ${results.errors}`);
+    console.log("=".repeat(60) + "\n");
+
     return NextResponse.json({
       success: true,
       message: `Processed ${results.processed} of ${results.total} files`,
       ...results,
     });
   } catch (error: any) {
-    console.error("❌ Manual auto-fetch: Fatal error:", error);
+    console.error("\n" + "=".repeat(60));
+    console.error("❌ MANUAL SYNC: Fatal error");
+    console.error(`   ${error?.message || error}`);
+    console.error("=".repeat(60) + "\n");
     return NextResponse.json(
       { error: error.message || "Failed to run auto-fetch" },
       { status: 500 }

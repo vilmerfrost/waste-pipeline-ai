@@ -5,11 +5,19 @@ This document describes the Azure Blob Storage integration for the Collecct work
 ## Overview
 
 The system integrates with Azure Blob Storage to:
-1. **Automatically fetch failed files** from `failed-to-process/` and `unsupported-file-formats/` folders (every 5 minutes)
+1. **Automatically fetch files** from **configurable input folders** (every 5 minutes)
 2. **Process them** through the AI extraction pipeline
 3. **Create Excel files** in the correct format
-4. **Upload to `incoming/`** folder for Simplitics processing
+4. **Upload to configurable output folder** for Simplitics processing
 5. **Monitor responses** and retry if rejected
+
+### Folder Configuration
+
+Input and output folders are **configurable in the web interface** (Settings → Azure & GUIDs):
+- Supports nested folder structures (e.g., `container/output/unable_to_process`)
+- Manual path entry for folders not visible in the browser
+- Multiple input folders can be configured
+- Set `AZURE_CONTAINER_NAME` environment variable to limit browsing to one container
 
 ## Auto-Fetcher
 
@@ -35,11 +43,30 @@ npm install @azure/storage-blob
 Add to your `.env.local`:
 
 ```env
+# Required: Azure Storage connection string
 AZURE_STORAGE_CONNECTION_STRING="DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...;EndpointSuffix=core.windows.net"
+
+# Required: Limit folder browsing to a specific container (recommended for performance)
 AZURE_CONTAINER_NAME="arrivalwastedata"
 ```
 
-### 3. Get Azure Credentials
+### 3. Configure Input/Output Folders
+
+Go to **Settings → Azure & GUIDs** in the web interface to configure:
+
+1. **Input folders** - Where to fetch files for processing
+   - Example: `arrivalwastedata/output/unable_to_process`
+   - You can add multiple folders
+   - Format: `container/folder/subfolder`
+
+2. **Output folder** - Where processed Excel files are saved
+   - Example: `arrivalwastedata/incoming`
+
+You can either:
+- Browse and select folders from the dropdown
+- Enter the full path manually (supports nested folders)
+
+### 4. Get Azure Credentials
 
 Contact Martin at Collecct to get:
 - Azure Storage Account connection string

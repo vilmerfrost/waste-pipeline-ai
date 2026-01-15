@@ -14,8 +14,9 @@ const DEFAULT_SETTINGS = {
   // Verification settings (anti-hallucination)
   enable_verification: false, // Off by default to save API costs
   verification_confidence_threshold: 0.85, // Verify if extraction confidence < 85%
-  // Azure folder settings
-  azure_input_folders: [{ container: "unsupported-file-format", folder: "", enabled: true }],
+  // Azure folder settings - empty by default, user must configure
+  // Format: [{ container: "arrivalwastedata", folder: "output/subfolder", enabled: true }]
+  azure_input_folders: [],
   azure_output_folder: "completed"
 };
 
@@ -32,12 +33,17 @@ export async function GET() {
 
     if (error) throw error;
 
+    // Include Azure container name from environment
+    const azureContainerName = process.env.AZURE_CONTAINER_NAME || null;
+
     return NextResponse.json({
       success: true,
       settings: {
         ...DEFAULT_SETTINGS,
         ...settings
-      }
+      },
+      // Include env-based config for UI display
+      azureContainerName,
     });
   } catch (error: any) {
     return NextResponse.json(

@@ -40,13 +40,88 @@ interface Settings {
 interface FolderInfo {
   name: string;
   path: string;
+  fullPath: string; // container/folder for easy selection
   fileCount: number;
+  subfolders: FolderInfo[];
+  isVirtualDirectory: boolean;
 }
 
 interface ContainerInfo {
   name: string;
   folders: FolderInfo[];
   rootFileCount: number;
+}
+
+// Recursive component for rendering nested folders
+function FolderTree({ 
+  folders, 
+  containerName, 
+  onSelect, 
+  expandedFolders, 
+  toggleFolder, 
+  level,
+  mode = 'input'
+}: { 
+  folders: FolderInfo[]; 
+  containerName: string;
+  onSelect: (container: string, folder: string) => void;
+  expandedFolders: Set<string>;
+  toggleFolder: (path: string) => void;
+  level: number;
+  mode?: 'input' | 'output';
+}) {
+  const bgHoverClass = mode === 'input' ? 'hover:bg-blue-100' : 'hover:bg-green-100';
+  
+  return (
+    <div className="mt-1 space-y-1" style={{ marginLeft: `${level * 16}px` }}>
+      {folders.map(folder => {
+        const hasSubfolders = folder.subfolders && folder.subfolders.length > 0;
+        const folderKey = `${containerName}/${folder.path}`;
+        
+        return (
+          <div key={folder.path}>
+            <div className="flex items-center gap-1">
+              {hasSubfolders && (
+                <button
+                  onClick={() => toggleFolder(folderKey)}
+                  className="p-1 hover:bg-gray-200 rounded"
+                >
+                  {expandedFolders.has(folderKey) 
+                    ? <ChevronDown className="w-3 h-3 text-gray-500" />
+                    : <ChevronRight className="w-3 h-3 text-gray-500" />
+                  }
+                </button>
+              )}
+              {!hasSubfolders && <div className="w-5" />}
+              <button
+                onClick={() => onSelect(containerName, folder.path)}
+                className={`flex-1 flex items-center gap-2 p-2 ${bgHoverClass} rounded-lg text-left transition-colors`}
+              >
+                <FolderOpen className="w-4 h-4 text-blue-500" />
+                <span className="text-gray-700">{folder.name}</span>
+                <span className="text-xs text-gray-400">
+                  ({folder.fileCount} filer{hasSubfolders && `, ${folder.subfolders.length} mappar`})
+                </span>
+              </button>
+            </div>
+            
+            {/* Render subfolders recursively */}
+            {hasSubfolders && expandedFolders.has(folderKey) && (
+              <FolderTree
+                folders={folder.subfolders}
+                containerName={containerName}
+                onSelect={onSelect}
+                expandedFolders={expandedFolders}
+                toggleFolder={toggleFolder}
+                level={level + 1}
+                mode={mode}
+              />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export default function SettingsPage() {
@@ -71,7 +146,10 @@ export default function SettingsPage() {
   const [inputFolders, setInputFolders] = useState<AzureInputFolder[]>([]);
   const [outputFolder, setOutputFolder] = useState("completed");
   const [expandedContainers, setExpandedContainers] = useState<Set<string>>(new Set());
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   const [showFolderPicker, setShowFolderPicker] = useState<'input' | 'output' | null>(null);
+  const [manualInputPath, setManualInputPath] = useState("");
+  const [manualOutputPath, setManualOutputPath] = useState("");
 
   // Active sidebar item
   const [activeSection, setActiveSection] = useState("material");
@@ -94,6 +172,8 @@ export default function SettingsPage() {
         setVerificationThreshold((data.settings.verification_confidence_threshold ?? 0.85) * 100);
         setInputFolders(data.settings.azure_input_folders ?? []);
         setOutputFolder(data.settings.azure_output_folder ?? "completed");
+        // Set Azure container from env
+        setDefaultAzureContainer(data.azureContainerName || null);
       }
     } catch (error) {
       console.error("Failed to fetch settings:", error);
@@ -102,6 +182,8 @@ export default function SettingsPage() {
     }
   };
 
+  const [defaultAzureContainer, setDefaultAzureContainer] = useState<string | null>(null);
+  
   const fetchAzureContainers = useCallback(async () => {
     setLoadingContainers(true);
     try {
@@ -110,6 +192,13 @@ export default function SettingsPage() {
       
       if (data.success) {
         setAzureContainers(data.containers);
+        setDefaultAzureContainer(data.defaultContainer || null);
+        if (data.defaultContainer) {
+          setMessage({ type: 'success', text: `Mappar hämtade från ${data.defaultContainer} (${data.scanDuration}ms)` });
+        } else {
+          setMessage({ type: 'success', text: `Mappar hämtade från alla containers (${data.scanDuration}ms)` });
+        }
+        setTimeout(() => setMessage(null), 3000);
       } else {
         setMessage({ type: 'error', text: data.error || "Kunde inte hämta Azure-mappar" });
         setTimeout(() => setMessage(null), 3000);
@@ -133,6 +222,64 @@ export default function SettingsPage() {
       }
       return next;
     });
+  };
+
+  const toggleFolder = (folderPath: string) => {
+    setExpandedFolders(prev => {
+      const next = new Set(prev);
+      if (next.has(folderPath)) {
+        next.delete(folderPath);
+      } else {
+        next.add(folderPath);
+      }
+      return next;
+    });
+  };
+
+  // Parse a full path like "arrivalwastedata/output/unable_to_process" into container and folder
+  const parseFullPath = (fullPath: string): { container: string; folder: string } => {
+    const parts = fullPath.split('/').filter(p => p.trim());
+    if (parts.length === 0) {
+      return { container: '', folder: '' };
+    }
+    const container = parts[0];
+    const folder = parts.slice(1).join('/');
+    return { container, folder };
+  };
+
+  const addManualInputFolder = () => {
+    const trimmed = manualInputPath.trim();
+    if (!trimmed) return;
+    
+    const { container, folder } = parseFullPath(trimmed);
+    if (!container) {
+      setMessage({ type: 'error', text: 'Ogiltig sökväg. Ange minst en container.' });
+      setTimeout(() => setMessage(null), 3000);
+      return;
+    }
+    
+    // Check if already exists
+    const exists = inputFolders.some(f => f.container === container && f.folder === folder);
+    if (!exists) {
+      setInputFolders([...inputFolders, { container, folder, enabled: true }]);
+      setManualInputPath("");
+      setMessage({ type: 'success', text: `Mapp tillagd: ${container}${folder ? '/' + folder : ''}` });
+      setTimeout(() => setMessage(null), 2000);
+    } else {
+      setMessage({ type: 'error', text: 'Denna mapp finns redan i listan.' });
+      setTimeout(() => setMessage(null), 3000);
+    }
+  };
+
+  const setManualOutputFolderPath = () => {
+    const trimmed = manualOutputPath.trim();
+    if (!trimmed) return;
+    
+    setOutputFolder(trimmed);
+    setManualOutputPath("");
+    setShowFolderPicker(null);
+    setMessage({ type: 'success', text: `Målmapp ändrad till: ${trimmed}` });
+    setTimeout(() => setMessage(null), 2000);
   };
 
   const addInputFolder = (container: string, folder: string = "") => {
@@ -872,6 +1019,38 @@ export default function SettingsPage() {
                       {loadingContainers ? 'Laddar...' : 'Hämta mappar'}
                     </button>
                   </div>
+                  
+                  {/* Container info box */}
+                  <div className={`mb-4 p-3 rounded-lg border ${
+                    defaultAzureContainer 
+                      ? 'bg-blue-50 border-blue-200' 
+                      : 'bg-yellow-50 border-yellow-200'
+                  }`}>
+                    <div className="flex items-start gap-2">
+                      <Cloud className={`w-4 h-4 mt-0.5 ${defaultAzureContainer ? 'text-blue-600' : 'text-yellow-600'}`} />
+                      <div className="flex-1">
+                        {defaultAzureContainer ? (
+                          <>
+                            <p className="text-sm font-medium text-blue-900">
+                              Begränsad till container: <code className="px-1 py-0.5 bg-blue-100 rounded">{defaultAzureContainer}</code>
+                            </p>
+                            <p className="text-xs text-blue-700 mt-1">
+                              Konfigurerat via AZURE_CONTAINER_NAME miljövariabel
+                            </p>
+                          </>
+                        ) : (
+                          <>
+                            <p className="text-sm font-medium text-yellow-900">
+                              Ingen container begränsning konfigurerad
+                            </p>
+                            <p className="text-xs text-yellow-700 mt-1">
+                              💡 Sätt <code className="px-1 py-0.5 bg-yellow-100 rounded">AZURE_CONTAINER_NAME</code> i miljövariabler för snabbare sökning
+                            </p>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
 
                   {/* Input Folders */}
                   <div className="mb-6">
@@ -943,51 +1122,88 @@ export default function SettingsPage() {
                     </button>
 
                     {/* Folder picker for input */}
-                    {showFolderPicker === 'input' && azureContainers.length > 0 && (
-                      <div className="mt-3 p-4 bg-gray-50 rounded-lg border border-gray-200 max-h-80 overflow-y-auto">
-                        <p className="text-xs text-gray-500 mb-3">Välj container eller mapp att övervaka:</p>
-                        {azureContainers.map(container => (
-                          <div key={container.name} className="mb-2">
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={() => toggleContainer(container.name)}
-                                className="p-1 hover:bg-gray-200 rounded"
-                              >
-                                {expandedContainers.has(container.name) 
-                                  ? <ChevronDown className="w-4 h-4 text-gray-500" />
-                                  : <ChevronRight className="w-4 h-4 text-gray-500" />
-                                }
-                              </button>
-                              <button
-                                onClick={() => addInputFolder(container.name)}
-                                className="flex-1 flex items-center gap-2 p-2 hover:bg-blue-100 rounded-lg text-left transition-colors"
-                              >
-                                <FolderOpen className="w-4 h-4 text-yellow-600" />
-                                <span className="font-medium text-gray-900">{container.name}</span>
-                                <span className="text-xs text-gray-500">
-                                  ({container.rootFileCount} filer i rot{container.folders.length > 0 && `, ${container.folders.length} mappar`})
-                                </span>
-                              </button>
-                            </div>
-                            
-                            {/* Sub-folders */}
-                            {expandedContainers.has(container.name) && container.folders.length > 0 && (
-                              <div className="ml-8 mt-1 space-y-1">
-                                {container.folders.map(folder => (
-                                  <button
-                                    key={folder.path}
-                                    onClick={() => addInputFolder(container.name, folder.name)}
-                                    className="flex items-center gap-2 p-2 hover:bg-blue-100 rounded-lg text-left transition-colors w-full"
-                                  >
-                                    <FolderOpen className="w-4 h-4 text-blue-500" />
-                                    <span className="text-gray-700">{folder.name}</span>
-                                    <span className="text-xs text-gray-500">({folder.fileCount} filer)</span>
-                                  </button>
-                                ))}
-                              </div>
-                            )}
+                    {showFolderPicker === 'input' && (
+                      <div className="mt-3 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                        {/* Manual input option */}
+                        <div className="mb-4 pb-4 border-b border-gray-200">
+                          <p className="text-xs text-gray-600 mb-2 font-medium">Ange mapp manuellt:</p>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={manualInputPath}
+                              onChange={(e) => setManualInputPath(e.target.value)}
+                              onKeyPress={(e) => {
+                                if (e.key === "Enter") addManualInputFolder();
+                              }}
+                              placeholder="container/folder/subfolder"
+                              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                            />
+                            <button
+                              onClick={addManualInputFolder}
+                              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors"
+                            >
+                              Lägg till
+                            </button>
                           </div>
-                        ))}
+                          <p className="text-xs text-gray-400 mt-1">
+                            Exempel: arrivalwastedata/output/unable_to_process
+                          </p>
+                        </div>
+
+                        {/* Browse folders */}
+                        {azureContainers.length > 0 ? (
+                          <div className="max-h-64 overflow-y-auto">
+                            <p className="text-xs text-gray-500 mb-3">Eller välj från listan:</p>
+                            {azureContainers.map(container => (
+                              <div key={container.name} className="mb-2">
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    onClick={() => toggleContainer(container.name)}
+                                    className="p-1 hover:bg-gray-200 rounded"
+                                  >
+                                    {expandedContainers.has(container.name) 
+                                      ? <ChevronDown className="w-4 h-4 text-gray-500" />
+                                      : <ChevronRight className="w-4 h-4 text-gray-500" />
+                                    }
+                                  </button>
+                                  <button
+                                    onClick={() => addInputFolder(container.name)}
+                                    className="flex-1 flex items-center gap-2 p-2 hover:bg-blue-100 rounded-lg text-left transition-colors"
+                                  >
+                                    <FolderOpen className="w-4 h-4 text-yellow-600" />
+                                    <span className="font-medium text-gray-900">{container.name}</span>
+                                    <span className="text-xs text-gray-500">
+                                      ({container.rootFileCount} filer{container.folders.length > 0 && `, ${container.folders.length} mappar`})
+                                    </span>
+                                  </button>
+                                </div>
+                                
+                                {/* Nested folders */}
+                                {expandedContainers.has(container.name) && container.folders.length > 0 && (
+                                  <FolderTree 
+                                    folders={container.folders} 
+                                    containerName={container.name}
+                                    onSelect={(container, folder) => addInputFolder(container, folder)}
+                                    expandedFolders={expandedFolders}
+                                    toggleFolder={toggleFolder}
+                                    level={1}
+                                  />
+                                )}
+                                
+                                {/* Show message if no folders found */}
+                                {expandedContainers.has(container.name) && container.folders.length === 0 && (
+                                  <div className="ml-8 mt-1 p-2 text-xs text-gray-500 italic">
+                                    Inga undermappar hittade. Använd manuell inmatning för djupare mappar.
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-center py-4 text-gray-500 text-sm">
+                            Klicka på "Hämta mappar" för att visa tillgängliga containers
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1027,57 +1243,91 @@ export default function SettingsPage() {
                     </div>
 
                     {/* Folder picker for output */}
-                    {showFolderPicker === 'output' && azureContainers.length > 0 && (
-                      <div className="mt-3 p-4 bg-gray-50 rounded-lg border border-gray-200 max-h-80 overflow-y-auto">
-                        <p className="text-xs text-gray-500 mb-3">Välj container eller mapp för bearbetade filer:</p>
-                        {azureContainers.map(container => (
-                          <div key={container.name} className="mb-2">
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={() => toggleContainer(container.name)}
-                                className="p-1 hover:bg-gray-200 rounded"
-                              >
-                                {expandedContainers.has(container.name) 
-                                  ? <ChevronDown className="w-4 h-4 text-gray-500" />
-                                  : <ChevronRight className="w-4 h-4 text-gray-500" />
-                                }
-                              </button>
-                              <button
-                                onClick={() => selectOutputFolder(container.name)}
-                                className={`flex-1 flex items-center gap-2 p-2 hover:bg-green-100 rounded-lg text-left transition-colors ${
-                                  outputFolder === container.name ? 'bg-green-100' : ''
-                                }`}
-                              >
-                                <FolderOpen className="w-4 h-4 text-yellow-600" />
-                                <span className="font-medium text-gray-900">{container.name}</span>
-                                {outputFolder === container.name && (
-                                  <Check className="w-4 h-4 text-green-600 ml-auto" />
-                                )}
-                              </button>
-                            </div>
-                            
-                            {/* Sub-folders */}
-                            {expandedContainers.has(container.name) && container.folders.length > 0 && (
-                              <div className="ml-8 mt-1 space-y-1">
-                                {container.folders.map(folder => (
+                    {showFolderPicker === 'output' && (
+                      <div className="mt-3 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                        {/* Manual input option */}
+                        <div className="mb-4 pb-4 border-b border-gray-200">
+                          <p className="text-xs text-gray-600 mb-2 font-medium">Ange målmapp manuellt:</p>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={manualOutputPath}
+                              onChange={(e) => setManualOutputPath(e.target.value)}
+                              onKeyPress={(e) => {
+                                if (e.key === "Enter") setManualOutputFolderPath();
+                              }}
+                              placeholder="container/folder/subfolder"
+                              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 font-mono"
+                            />
+                            <button
+                              onClick={setManualOutputFolderPath}
+                              className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors"
+                            >
+                              Välj
+                            </button>
+                          </div>
+                          <p className="text-xs text-gray-400 mt-1">
+                            Exempel: arrivalwastedata/incoming eller completed
+                          </p>
+                        </div>
+
+                        {/* Browse folders */}
+                        {azureContainers.length > 0 ? (
+                          <div className="max-h-64 overflow-y-auto">
+                            <p className="text-xs text-gray-500 mb-3">Eller välj från listan:</p>
+                            {azureContainers.map(container => (
+                              <div key={container.name} className="mb-2">
+                                <div className="flex items-center gap-2">
                                   <button
-                                    key={folder.path}
-                                    onClick={() => selectOutputFolder(container.name, folder.name)}
-                                    className={`flex items-center gap-2 p-2 hover:bg-green-100 rounded-lg text-left transition-colors w-full ${
-                                      outputFolder === folder.path ? 'bg-green-100' : ''
+                                    onClick={() => toggleContainer(container.name)}
+                                    className="p-1 hover:bg-gray-200 rounded"
+                                  >
+                                    {expandedContainers.has(container.name) 
+                                      ? <ChevronDown className="w-4 h-4 text-gray-500" />
+                                      : <ChevronRight className="w-4 h-4 text-gray-500" />
+                                    }
+                                  </button>
+                                  <button
+                                    onClick={() => selectOutputFolder(container.name)}
+                                    className={`flex-1 flex items-center gap-2 p-2 hover:bg-green-100 rounded-lg text-left transition-colors ${
+                                      outputFolder === container.name ? 'bg-green-100' : ''
                                     }`}
                                   >
-                                    <FolderOpen className="w-4 h-4 text-blue-500" />
-                                    <span className="text-gray-700">{folder.name}</span>
-                                    {outputFolder === folder.path && (
+                                    <FolderOpen className="w-4 h-4 text-yellow-600" />
+                                    <span className="font-medium text-gray-900">{container.name}</span>
+                                    {outputFolder === container.name && (
                                       <Check className="w-4 h-4 text-green-600 ml-auto" />
                                     )}
                                   </button>
-                                ))}
+                                </div>
+                                
+                                {/* Nested folders */}
+                                {expandedContainers.has(container.name) && container.folders.length > 0 && (
+                                  <FolderTree 
+                                    folders={container.folders} 
+                                    containerName={container.name}
+                                    onSelect={(container, folder) => selectOutputFolder(container, folder)}
+                                    expandedFolders={expandedFolders}
+                                    toggleFolder={toggleFolder}
+                                    level={1}
+                                    mode="output"
+                                  />
+                                )}
+                                
+                                {/* Show message if no folders found */}
+                                {expandedContainers.has(container.name) && container.folders.length === 0 && (
+                                  <div className="ml-8 mt-1 p-2 text-xs text-gray-500 italic">
+                                    Inga undermappar hittade. Använd manuell inmatning.
+                                  </div>
+                                )}
                               </div>
-                            )}
+                            ))}
                           </div>
-                        ))}
+                        ) : (
+                          <div className="text-center py-4 text-gray-500 text-sm">
+                            Klicka på "Hämta mappar" för att visa tillgängliga containers
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

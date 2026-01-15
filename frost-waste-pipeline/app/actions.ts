@@ -566,6 +566,7 @@ export async function deleteDocument(formData: FormData) {
     await supabase.from("documents").delete().eq("id", id);
     revalidatePath("/");
     revalidatePath("/archive");
+    revalidatePath("/collecct");
   }
 export async function toggleArchive(formData: FormData) {
     const supabase = createServiceRoleClient();

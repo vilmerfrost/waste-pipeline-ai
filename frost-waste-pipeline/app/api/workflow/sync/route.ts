@@ -4,9 +4,11 @@ import { createServiceRoleClient } from "@/lib/supabase";
 import { uploadAndEnqueueDocument } from "@/app/actions";
 import { sanitizeFilename } from "@/lib/sanitize-filename";
 
+export const dynamic = "force-dynamic";
+
 /**
  * Workflow Sync Endpoint
- * Fetches files from Azure failed folders and processes them
+ * Fetches files from Azure configured input folders and processes them
  * Matches Python workflow_manager.py functionality
  */
 export async function POST() {
@@ -21,18 +23,55 @@ export async function POST() {
       );
     }
 
-    const connector = new AzureBlobConnector(connectionString, containerName);
-    const failedFiles = await connector.listFailedFiles();
+    console.log("\n" + "=".repeat(60));
+    console.log("🔄 WORKFLOW SYNC: Starting...");
+    console.log("=".repeat(60));
 
-    if (failedFiles.length === 0) {
+    const supabase = createServiceRoleClient();
+
+    // Fetch folder settings from database
+    const { data: settings, error: settingsError } = await supabase
+      .from("settings")
+      .select("azure_input_folders")
+      .eq("user_id", "default")
+      .single();
+
+    if (settingsError) {
+      console.warn(`⚠️ Could not fetch settings: ${settingsError.message}`);
+    }
+
+    const inputFolders = settings?.azure_input_folders;
+    
+    if (inputFolders && Array.isArray(inputFolders) && inputFolders.length > 0) {
+      const enabledFolders = inputFolders.filter((f: any) => f.enabled !== false);
+      console.log(`\n📁 Configured input folders (${enabledFolders.length} enabled):`);
+      enabledFolders.forEach((f: any, i: number) => {
+        const path = f.folder ? `${f.container}/${f.folder}` : f.container;
+        console.log(`   ${i + 1}. ${path}`);
+      });
+    } else {
+      console.log("\n⚠️ No input folders configured!");
       return NextResponse.json({
-        success: true,
-        message: "No failed files to process",
+        success: false,
+        error: "No input folders configured. Please configure folders in Settings → Azure & GUIDs.",
         processed: 0,
       });
     }
 
-    const supabase = createServiceRoleClient();
+    console.log("\n🔎 Scanning for files...");
+    const connector = new AzureBlobConnector(connectionString, containerName);
+    const failedFiles = await connector.listFailedFiles(inputFolders);
+
+    if (failedFiles.length === 0) {
+      console.log("\n✅ WORKFLOW SYNC: Complete - No files to process\n");
+      return NextResponse.json({
+        success: true,
+        message: "No files found in configured folders",
+        processed: 0,
+      });
+    }
+
+    console.log(`\n📦 Found ${failedFiles.length} file(s) to process`);
     const results = {
       total: failedFiles.length,
       processed: 0,
@@ -117,13 +156,21 @@ export async function POST() {
       }
     }
 
+    console.log("\n" + "=".repeat(60));
+    console.log(`✅ WORKFLOW SYNC: Complete`);
+    console.log(`   📊 Total: ${results.total}, Processed: ${results.processed}, Errors: ${results.errors}`);
+    console.log("=".repeat(60) + "\n");
+
     return NextResponse.json({
       success: true,
       message: `Processed ${results.processed} of ${results.total} files`,
       ...results,
     });
   } catch (error: any) {
-    console.error("Error in workflow sync:", error);
+    console.error("\n" + "=".repeat(60));
+    console.error("❌ WORKFLOW SYNC: Fatal error");
+    console.error(`   ${error?.message || error}`);
+    console.error("=".repeat(60) + "\n");
     return NextResponse.json(
       { error: error.message || "Failed to sync workflow" },
       { status: 500 }

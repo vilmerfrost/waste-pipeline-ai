@@ -30,30 +30,52 @@ export class AzureBlobConnector {
   }
 
   /**
-   * List all files from failed containers
-   * Checks containers: unable-to-process and unsupported-file-format
-   * @param customFolders - Optional array of {container, folder} to check instead of defaults
+   * List all files from configured input folders
+   * @param customFolders - Array of {container, folder, enabled} to check. REQUIRED - no defaults.
+   *                        container: The blob container name (e.g., "arrivalwastedata")
+   *                        folder: Optional folder path within container (e.g., "output/unable_to_process")
    */
   async listFailedFiles(customFolders?: Array<{container: string; folder: string; enabled?: boolean}>): Promise<FileInfo[]> {
     const allFailedFiles: FileInfo[] = [];
     
-    // Use custom folders if provided, otherwise use defaults
-    const foldersToCheck = customFolders 
-      ? customFolders.filter(f => f.enabled !== false).map(f => ({
-          container: f.container,
-          folder: f.folder || ""
-        }))
-      : [
-          { container: 'unable-to-process', folder: '' },
-          { container: 'unsupported-file-format', folder: '' }
-        ];
+    // Validate that we have folders to check
+    if (!customFolders || customFolders.length === 0) {
+      console.warn("⚠️ No input folders configured. Please configure folders in settings.");
+      return allFailedFiles;
+    }
+    
+    // Filter to enabled folders only
+    const foldersToCheck = customFolders
+      .filter(f => f.enabled !== false && f.container)
+      .map(f => ({
+        container: f.container.trim(),
+        folder: (f.folder || "").trim()
+      }));
+    
+    if (foldersToCheck.length === 0) {
+      console.warn("⚠️ No enabled input folders found. Please enable at least one folder in settings.");
+      return allFailedFiles;
+    }
+    
+    console.log(`📂 Checking ${foldersToCheck.length} configured folder(s)...`);
     
     for (const { container: containerName, folder } of foldersToCheck) {
+      const locationLabel = folder ? `${containerName}/${folder}` : containerName;
+      console.log(`  🔍 Scanning: ${locationLabel}`);
+      
       try {
         const containerClient = this.blobServiceClient.getContainerClient(containerName);
         
+        // Check if container exists first
+        const containerExists = await containerClient.exists();
+        if (!containerExists) {
+          console.error(`  ❌ Container "${containerName}" does not exist. Check your Azure storage settings.`);
+          continue;
+        }
+        
         // List blobs - if folder is specified, use it as prefix
         const listOptions = folder ? { prefix: folder + "/" } : {};
+        let fileCountInThisLocation = 0;
         
         for await (const blob of containerClient.listBlobsFlat(listOptions)) {
           // Skip folder markers
@@ -71,18 +93,19 @@ export class AzureBlobConnector {
           };
           
           allFailedFiles.push(fileInfo);
+          fileCountInThisLocation++;
         }
         
-        const locationLabel = folder ? `${containerName}/${folder}` : containerName;
-        console.log(`✅ Found ${allFailedFiles.length} files in ${locationLabel}`);
+        console.log(`  ✅ Found ${fileCountInThisLocation} files in ${locationLabel}`);
         
-      } catch (error) {
-        const locationLabel = folder ? `${containerName}/${folder}` : containerName;
-        console.error(`❌ Error listing files in ${locationLabel}:`, error);
+      } catch (error: any) {
+        console.error(`  ❌ Error listing files in ${locationLabel}:`, error?.message || error);
+        // Continue with other folders instead of failing completely
         continue;
       }
     }
     
+    console.log(`📊 Total files found: ${allFailedFiles.length}`);
     return allFailedFiles;
   }
 

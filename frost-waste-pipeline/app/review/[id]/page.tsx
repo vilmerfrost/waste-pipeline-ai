@@ -17,6 +17,7 @@ import { PaginatedTable } from "@/components/paginated-table";
 import { Breadcrumbs } from "@/components/breadcrumbs";
 import { getReviewBreadcrumbs } from "@/lib/breadcrumb-utils";
 import { truncateFilename } from "@/lib/filename-utils";
+import { DeleteDocumentButton } from "@/components/delete-document-button";
 
 export const dynamic = "force-dynamic";
 
@@ -266,6 +267,15 @@ export default async function ReviewPage({
             </Link>
             <div className="flex items-center gap-3">
               <ReverifyButton docId={doc.id} />
+              {doc.status !== 'exported' && (
+                <DeleteDocumentButton
+                  documentId={doc.id}
+                  storagePath={doc.storage_path}
+                  filename={doc.filename}
+                  redirectAfter="/collecct"
+                  variant="button"
+                />
+              )}
               {nextDocId && (
                 <Link
                   href={`/review/${nextDocId}`}
