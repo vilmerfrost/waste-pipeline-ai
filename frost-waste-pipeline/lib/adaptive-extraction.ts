@@ -920,7 +920,7 @@ export async function extractAdaptive(
     }
   }
   console.log(`   Extracted: ${allItems.length}/${totalRows} (${(extractionRate*100).toFixed(0)}%)`);
-  console.log(`   Aggregated: ${aggregated.length} rows`);
+  console.log(`   Total rows: ${processedItems.length} (${aggregated.length} unique combinations)`);  
   console.log(`   Total weight: ${(totalWeight/1000).toFixed(2)} ton`);
   console.log(`   Unique addresses: ${uniqueAddresses}`);
   console.log(`   Unique materials: ${uniqueMaterials}`);
@@ -950,7 +950,7 @@ export async function extractAdaptive(
   };
   
   return {
-    lineItems: aggregated,
+    lineItems: processedItems,
     metadata: {
       totalRows,
       extractedRows: allItems.length,
