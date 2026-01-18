@@ -69,20 +69,32 @@ export function ReviewForm({
   };
 
   // Normalize lineItems to ensure consistent format
+  // IMPORTANT: Preserve ALL original fields, not just the ones we display in the form
   const normalizeLineItems = (items: any[]): any[] => {
-    return items.map(item => ({
-      material: normalizeValue(item.material),
-      weightKg: normalizeValue(item.weightKg),
-      location: normalizeValue(item.location || item.address), // Handle both location and address
-      address: normalizeValue(item.address || item.location), // Support both field names
-      receiver: normalizeValue(item.receiver),
-      date: normalizeValue(item.date),
-      handling: normalizeValue(item.handling),
-      isHazardous: normalizeValue(item.isHazardous),
-      co2Saved: normalizeValue(item.co2Saved || item.co2),
-      costSEK: normalizeValue(item.costSEK || item.cost),
-      unit: normalizeValue(item.unit || "Kg"),
-    }));
+    return items.map(item => {
+      // Start with ALL original fields to preserve data like wasteCode, referensnummer, fordon, etc.
+      const normalizedItem: any = {};
+      
+      // Copy ALL original fields, normalizing their format
+      for (const key of Object.keys(item)) {
+        normalizedItem[key] = normalizeValue(item[key]);
+      }
+      
+      // Ensure critical fields are properly set (with fallbacks)
+      normalizedItem.material = normalizeValue(item.material);
+      normalizedItem.weightKg = normalizeValue(item.weightKg);
+      normalizedItem.location = normalizeValue(item.location || item.address);
+      normalizedItem.address = normalizeValue(item.address || item.location);
+      normalizedItem.receiver = normalizeValue(item.receiver);
+      normalizedItem.date = normalizeValue(item.date);
+      normalizedItem.handling = normalizeValue(item.handling);
+      normalizedItem.isHazardous = normalizeValue(item.isHazardous);
+      normalizedItem.co2Saved = normalizeValue(item.co2Saved || item.co2);
+      normalizedItem.costSEK = normalizeValue(item.costSEK || item.cost);
+      normalizedItem.unit = normalizeValue(item.unit || "Kg");
+      
+      return normalizedItem;
+    });
   };
   
   // State för rader så vi kan loopa och räkna
@@ -285,12 +297,18 @@ export function ReviewForm({
       setShowSuccess(true);
       setTimeout(() => setShowSuccess(false), 3000);
       
-      // Navigate to next document if requested
-      if (goToNext && nextDocId) {
-        router.push(`/review/${nextDocId}`);
-      } else if (goToNext && !nextDocId) {
-        // No more documents to review, go back to dashboard
-        router.push('/collecct');
+      // Handle navigation based on button clicked
+      if (goToNext) {
+        // "Spara & Nästa" - navigate to next document or dashboard
+        if (nextDocId) {
+          router.push(`/review/${nextDocId}`);
+        } else {
+          // No more documents to review, go back to dashboard
+          router.push('/collecct');
+        }
+      } else {
+        // "Spara" - stay on same page, refresh to show updated data
+        router.refresh();
       }
       
     } catch (error) {
@@ -343,7 +361,7 @@ export function ReviewForm({
           </div>
         )}
         
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {/* Datum - EDITABLE */}
           <div>
             <label className="block text-sm font-semibold text-slate-800 mb-1.5">
@@ -381,7 +399,7 @@ export function ReviewForm({
         <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">
           Totaler (Live)
         </h3>
-        <div className="grid grid-cols-3 gap-4 bg-gray-50 p-4 rounded-lg">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-gray-50 p-4 rounded-lg">
           <div>
             <div className="text-xs text-gray-500 mb-1">CO2 Besparing</div>
             <div className="text-xl font-bold text-green-600">
@@ -407,7 +425,7 @@ export function ReviewForm({
         <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">
           Hämtadress (Huvud)
         </h3>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {/* Projektadress - EDITABLE */}
           <div>
             <label className="block text-sm font-semibold text-slate-800 mb-1.5">

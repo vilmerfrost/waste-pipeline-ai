@@ -17,6 +17,7 @@ import { PaginatedTable } from "@/components/paginated-table";
 import { Breadcrumbs } from "@/components/breadcrumbs";
 import { getReviewBreadcrumbs } from "@/lib/breadcrumb-utils";
 import { truncateFilename } from "@/lib/filename-utils";
+import { DeleteDocumentButton } from "@/components/delete-document-button";
 
 export const dynamic = "force-dynamic";
 
@@ -68,6 +69,32 @@ export default async function ReviewPage({
     }
     return field;
   };
+
+  // === EXPORT PREVIEW DATA ===
+  // Apply the SAME fallbacks as the export-to-azure route so users see the final result
+  // Get document-level metadata for fallbacks
+  const docDate = getValue(extractedData.documentMetadata?.date) || 
+                  getValue(extractedData.date) || 
+                  (() => {
+                    // Try to extract from filename
+                    const match = doc.filename.replace(/\s*\(\d+\)/g, '').match(/(\d{4}-\d{2}-\d{2})/);
+                    return match ? match[1] : new Date().toISOString().split('T')[0];
+                  })();
+  const docAddress = getValue(extractedData.documentMetadata?.address) || getValue(extractedData.address) || "";
+  const docReceiver = getValue(extractedData.documentMetadata?.receiver) || getValue(extractedData.receiver) || "";
+  const docSupplier = getValue(extractedData.documentMetadata?.supplier) || getValue(extractedData.supplier) || "";
+
+  // Create export preview rows (exactly what will be in Excel)
+  const exportPreviewRows = lineItems.map((item: any, idx: number) => ({
+    rowNum: idx + 1,
+    date: getValue(item.date) || docDate,
+    location: getValue(item.location) || getValue(item.address) || docAddress,
+    material: getValue(item.material) || "Okänt material",
+    weightKg: parseFloat(String(getValue(item.weightKg) || getValue(item.weight) || 0)),
+    unit: getValue(item.unit) || "Kg",
+    receiver: getValue(item.receiver) || docReceiver || "Okänd mottagare",
+    isHazardous: getValue(item.isHazardous) || false,
+  }));
   
   // Calculate stats from lineItems
   const uniqueAddresses = new Set(
@@ -188,28 +215,23 @@ export default async function ReviewPage({
     .filter(([_, indices]) => indices.length > 1)
     .map(([key, indices]) => ({ key, indices }));
 
-  // Validation issues
+  // Validation issues - now using export preview data (with fallbacks applied)
   const validation = extractedData._validation || { completeness: 100, issues: [] };
   const issues = [...(validation.issues || [])];
   
-  // Check for missing mandatory fields
-  lineItems.forEach((item: any, index: number) => {
-    const material = getValue(item.material);
-    const weightKg = getValue(item.weightKg);
-    const address = getValue(item.address) || getValue(item.location) || getValue(extractedData.address);
-    const receiver = getValue(item.receiver) || getValue(extractedData.receiver);
-    
-    if (!material || String(material).trim() === "") {
-      issues.push(`KRITISKT: Rad ${index + 1} saknar Material`);
+  // Check for missing mandatory fields in EXPORT data (after fallbacks)
+  exportPreviewRows.forEach((row: any) => {
+    if (!row.material || row.material === "Okänt material") {
+      issues.push(`KRITISKT: Rad ${row.rowNum} saknar Material`);
     }
-    if (!weightKg || Number(weightKg) === 0) {
-      issues.push(`KRITISKT: Rad ${index + 1} saknar Vikt`);
+    if (!row.weightKg || Number(row.weightKg) === 0) {
+      issues.push(`KRITISKT: Rad ${row.rowNum} saknar Vikt`);
     }
-    if (!address || address === "SAKNAS" || String(address).trim() === "") {
-      issues.push(`KRITISKT: Rad ${index + 1} saknar Adress`);
+    if (!row.location || row.location === "SAKNAS" || String(row.location).trim() === "") {
+      issues.push(`VARNING: Rad ${row.rowNum} saknar Adress (använder dokumentnivå: "${docAddress || 'tom'}")`);
     }
-    if (!receiver || String(receiver).trim() === "") {
-      issues.push(`KRITISKT: Rad ${index + 1} saknar Mottagare`);
+    if (!row.receiver || row.receiver === "Okänd mottagare") {
+      issues.push(`VARNING: Rad ${row.rowNum} saknar Mottagare (använder fallback: "Okänd mottagare")`);
     }
   });
 
@@ -228,14 +250,14 @@ export default async function ReviewPage({
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <div className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-6 py-6">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
           {/* Breadcrumbs */}
           <Breadcrumbs 
             items={getReviewBreadcrumbs(doc.id, doc.filename)} 
             className="mb-4" 
           />
           
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
             <Link
               href="/collecct"
               className="flex items-center gap-2 px-4 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
@@ -245,6 +267,15 @@ export default async function ReviewPage({
             </Link>
             <div className="flex items-center gap-3">
               <ReverifyButton docId={doc.id} />
+              {doc.status !== 'exported' && (
+                <DeleteDocumentButton
+                  documentId={doc.id}
+                  storagePath={doc.storage_path}
+                  filename={doc.filename}
+                  redirectAfter="/collecct"
+                  variant="button"
+                />
+              )}
               {nextDocId && (
                 <Link
                   href={`/review/${nextDocId}`}
@@ -286,7 +317,7 @@ export default async function ReviewPage({
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-6 py-8">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
         {/* AI SUMMARY */}
         <div className={`mb-6 p-4 rounded-lg border ${
           aiSummary.startsWith('✓') 
@@ -375,7 +406,7 @@ export default async function ReviewPage({
 
         {/* COLUMN LEGEND */}
         <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-          <div className="flex items-start justify-between">
+          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
             <div>
               <h3 className="font-semibold text-blue-900 mb-2">
                 Kolumner ({allColumns.length})
@@ -428,7 +459,7 @@ export default async function ReviewPage({
                 </div>
               )}
             </div>
-            <div className="text-xs text-blue-700 ml-4">
+            <div className="text-xs text-blue-700 lg:ml-4">
               <div className="font-semibold mb-1">Legend:</div>
               <div className="flex items-center gap-2 mb-1">
                 <span className="inline-block w-3 h-3 bg-blue-600 rounded-full"></span>
@@ -462,37 +493,25 @@ export default async function ReviewPage({
           )}
         </div>
 
-        {/* MAIN CONTENT GRID */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-6">
-          {/* Left: Document Preview */}
-          <div className="space-y-4">
-            <div className="bg-white rounded-lg border border-gray-200 p-6">
-              <h2 className="text-lg font-semibold mb-4">Förhandsvisning</h2>
-              {signedUrl ? (
-                isExcel ? (
-                  <ExcelViewer url={signedUrl} />
-                ) : (
-                  <iframe 
-                    src={signedUrl} 
-                    className="w-full h-full min-h-[600px] rounded border border-gray-200" 
-                    title="PDF Viewer" 
-                  />
-                )
+        {/* Left: Document Preview */}
+        <div className="mb-6">
+          <div className="bg-white rounded-lg border border-gray-200 p-6">
+            <h2 className="text-lg font-semibold mb-4">Förhandsvisning</h2>
+            {signedUrl ? (
+              isExcel ? (
+                <ExcelViewer url={signedUrl} />
               ) : (
-                <div className="text-center py-8 text-gray-500">
-                  Förhandsvisning inte tillgänglig
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Right: Review Form */}
-          <div className="space-y-4">
-            <ReviewForm
-              initialData={extractedData}
-              documentId={doc.id}
-              nextDocId={nextDocId}
-            />
+                <iframe 
+                  src={signedUrl} 
+                  className="w-full h-full min-h-[600px] rounded border border-gray-200" 
+                  title="PDF Viewer" 
+                />
+              )
+            ) : (
+              <div className="text-center py-8 text-gray-500">
+                Förhandsvisning inte tillgänglig
+              </div>
+            )}
           </div>
         </div>
 
@@ -562,14 +581,124 @@ export default async function ReviewPage({
           </div>
         )}
 
-        {/* DATA TABLE WITH PAGINATION */}
+        {/* RAW EXTRACTED DATA TABLE */}
         {lineItems.length > 0 && (
           <div className="mb-6">
-            <h2 className="text-xl font-semibold text-gray-900 mb-4">Extraherad Data</h2>
+            <div className="flex items-center gap-3 mb-4">
+              <h2 className="text-xl font-semibold text-gray-900">Extraherad Data (Rådata från AI)</h2>
+              <span className="px-3 py-1 bg-gray-100 text-gray-600 text-sm rounded-full">
+                {lineItems.length} rader extraherade
+              </span>
+            </div>
+            <p className="text-sm text-gray-500 mb-4">
+              Rå data som AI:n extraherade. Fält med "SAKNAS" fylls i med fallback-värden vid export.
+            </p>
             <PaginatedTable 
               lineItems={lineItems}
               columns={allColumns}
             />
+          </div>
+        )}
+
+        {/* Right: Review Form */}
+        <div className="mb-6">
+          <ReviewForm
+            initialData={extractedData}
+            documentId={doc.id}
+            nextDocId={nextDocId}
+          />
+        </div>
+
+        {/* === EXPORT PREVIEW === */}
+        {/* Shows EXACTLY what will be in the Excel file uploaded to Azure */}
+        {exportPreviewRows.length > 0 && (
+          <div className="mb-6">
+            <div className="flex items-center gap-3 mb-4">
+              <h2 className="text-xl font-semibold text-gray-900">
+                Förhandsgranskning av Export
+              </h2>
+              <span className="px-3 py-1 bg-green-100 text-green-800 text-sm rounded-full font-medium">
+                {exportPreviewRows.length} rader → Excel
+              </span>
+            </div>
+            <p className="text-sm text-gray-600 mb-4">
+              Detta är exakt vad som kommer att exporteras till Excel-filen i Azure. 
+              Fallback-värden från dokumentnivå har applicerats där data saknas.
+            </p>
+            
+            <div className="bg-white rounded-lg border-2 border-green-200 overflow-hidden">
+              <div className="bg-green-50 px-4 py-2 border-b border-green-200">
+                <span className="text-sm font-medium text-green-800">
+                  Excel-format (Simplitics-kompatibel)
+                </span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-blue-600 text-white">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-medium uppercase">#</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium uppercase">Utförtdatum</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium uppercase">Hämtställe</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium uppercase">Material</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium uppercase">Kvantitet</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium uppercase">Enhet</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium uppercase">Leveransställe</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium uppercase">Farligt avfall</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {exportPreviewRows.slice(0, 10).map((row: any) => (
+                      <tr key={row.rowNum} className="hover:bg-green-50">
+                        <td className="px-4 py-3 text-sm text-gray-500">{row.rowNum}</td>
+                        <td className="px-4 py-3 text-sm font-medium">{row.date}</td>
+                        <td className="px-4 py-3 text-sm">{row.location || <span className="text-gray-400">-</span>}</td>
+                        <td className="px-4 py-3 text-sm">{row.material}</td>
+                        <td className="px-4 py-3 text-sm font-mono">
+                          {row.weightKg.toLocaleString('sv-SE', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="px-4 py-3 text-sm">{row.unit}</td>
+                        <td className="px-4 py-3 text-sm">{row.receiver}</td>
+                        <td className="px-4 py-3 text-sm">
+                          {row.isHazardous ? (
+                            <span className="px-2 py-1 bg-red-100 text-red-800 rounded text-xs font-medium">Ja</span>
+                          ) : (
+                            <span className="text-gray-500">Nej</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {exportPreviewRows.length > 10 && (
+                <div className="px-4 py-3 bg-gray-50 border-t text-sm text-gray-600">
+                  + {exportPreviewRows.length - 10} fler rader...
+                </div>
+              )}
+            </div>
+            
+            {/* Summary of fallbacks applied */}
+            <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+              <h4 className="text-sm font-semibold text-blue-900 mb-2">Fallback-värden (dokumentnivå):</h4>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                <div>
+                  <span className="text-blue-700 font-medium">Datum:</span>{' '}
+                  <span className="text-gray-900">{docDate}</span>
+                </div>
+                <div>
+                  <span className="text-blue-700 font-medium">Adress:</span>{' '}
+                  <span className="text-gray-900">{docAddress || <span className="text-gray-400">-</span>}</span>
+                </div>
+                <div>
+                  <span className="text-blue-700 font-medium">Mottagare:</span>{' '}
+                  <span className="text-gray-900">{docReceiver || "Okänd mottagare"}</span>
+                </div>
+                <div>
+                  <span className="text-blue-700 font-medium">Leverantör:</span>{' '}
+                  <span className="text-gray-900">{docSupplier || <span className="text-gray-400">-</span>}</span>
+                </div>
+              </div>
+            </div>
           </div>
         )}
       </div>

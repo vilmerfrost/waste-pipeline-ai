@@ -52,7 +52,7 @@ class CollecctExtractorAgent:
     """
     
     # Supported languages
-    SUPPORTED_LANGUAGES = ['sv', 'fi', 'no', 'en']
+    SUPPORTED_LANGUAGES = ['sv', 'fi', 'no', 'en', 'dk', 'no']
     
     # Only kg allowed - reject these units
     INVALID_UNITS = ['ton', 'tons', 'tonne', 'tonnes', 'lb', 'lbs', 'pound', 'pounds', 'g', 'gram']
@@ -210,7 +210,9 @@ OUTPUT FORMAT (JSON array):
 
 VALIDATION RULES:
 - If weight is in tons, convert to kg (1 ton = 1000 kg) and include original value
-- If weight is in other units (lbs, g), flag as ERROR
+- If weight is in grams (g), convert to kg (÷ 1000)
+- If weight is in pounds (lbs), convert to kg (1 lb = 0.453592 kg)
+- ALWAYS output weight_kg in kilograms after conversion
 - If address is missing, flag as ERROR
 - If date format is unclear, use best guess and mark confidence < 0.9
 - Hazardous field is low priority - OK to leave null
@@ -297,28 +299,42 @@ Extract all rows. Flag issues but include data anyway."""
         
         value = float(numbers[0].replace(',', '.'))
         
-        # Check unit
+        # Check unit and convert to kg
         weight_lower = str(weight_str).lower()
+        original_value = value
+        converted = False
         
-        # Check for invalid units
-        for invalid_unit in self.INVALID_UNITS:
-            if invalid_unit in weight_lower and 'kg' not in weight_lower:
-                issues.append(ValidationIssue(
-                    row_index=row_idx,
-                    field='weight',
-                    issue_type=ValidationStatus.ERROR,
-                    message=f'Invalid unit detected: {invalid_unit}. Only kg allowed.'
-                ))
-                return None, issues
-        
-        # Convert tons to kg if needed
-        if 'ton' in weight_lower and 'kg' not in weight_lower:
+        # Convert tons to kg
+        if ('ton' in weight_lower or weight_lower.strip().endswith('t')) and 'kg' not in weight_lower:
             value = value * 1000
+            converted = True
             issues.append(ValidationIssue(
                 row_index=row_idx,
                 field='weight',
                 issue_type=ValidationStatus.WARNING,
-                message=f'Converted {weight_str} to {value} kg'
+                message=f'Converted {weight_str} ({original_value} ton) to {value} kg'
+            ))
+        
+        # Convert grams to kg
+        elif ('gram' in weight_lower or (weight_lower.strip().endswith('g') and 'kg' not in weight_lower)):
+            value = value / 1000
+            converted = True
+            issues.append(ValidationIssue(
+                row_index=row_idx,
+                field='weight',
+                issue_type=ValidationStatus.WARNING,
+                message=f'Converted {weight_str} ({original_value} g) to {value} kg'
+            ))
+        
+        # Convert pounds to kg
+        elif 'lb' in weight_lower or 'pound' in weight_lower:
+            value = value * 0.453592
+            converted = True
+            issues.append(ValidationIssue(
+                row_index=row_idx,
+                field='weight',
+                issue_type=ValidationStatus.WARNING,
+                message=f'Converted {weight_str} ({original_value} lbs) to {value:.2f} kg'
             ))
         
         return value, issues

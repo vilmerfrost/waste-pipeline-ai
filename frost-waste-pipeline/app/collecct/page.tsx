@@ -12,17 +12,23 @@ import { UndoExportButton } from "@/components/undo-export-button";
 import { formatDate, formatDateTime } from "@/lib/time-utils";
 import { RelativeTime } from "@/components/relative-time";
 import { truncateFilename } from "@/lib/filename-utils";
+import { DeleteDocumentButton } from "@/components/delete-document-button";
+import { Pagination } from "@/components/pagination";
 
 export const dynamic = "force-dynamic";
 
 export default async function CollecctDashboard({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; page?: string; perPage?: string }>;
 }) {
   const supabase = createServiceRoleClient();
   const params = await searchParams;
   const activeTab = params.tab || "active";
+  
+  // Pagination params
+  const currentPage = Math.max(1, parseInt(params.page || "1", 10));
+  const itemsPerPage = Math.min(50, Math.max(10, parseInt(params.perPage || "10", 10)));
 
   // Fetch documents - filter by tab
   let documentsQuery = supabase
@@ -39,15 +45,50 @@ export default async function CollecctDashboard({
 
   const { data: documents } = await documentsQuery;
 
+  // Fetch paginated needs_review documents separately (only for active tab)
+  let needsReviewDocs: any[] = [];
+  let needsReviewTotal = 0;
+  
+  if (activeTab === "active") {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage - 1;
+    
+    // Get total count - removed exported_at filter since needs_review shouldn't be exported
+    const { count } = await supabase
+      .from("documents")
+      .select("*", { count: "exact", head: true })
+      .eq("status", "needs_review");
+    
+    needsReviewTotal = count || 0;
+    
+    // FALLBACK: Also check the main documents array in case count query missed some
+    const needsReviewFromMain = documents?.filter(d => d.status === "needs_review") || [];
+    if (needsReviewTotal === 0 && needsReviewFromMain.length > 0) {
+      needsReviewTotal = needsReviewFromMain.length;
+    }
+    
+    // Get paginated data - removed exported_at filter
+    const { data: paginatedNeedsReview } = await supabase
+      .from("documents")
+      .select("*")
+      .eq("status", "needs_review")
+      .order("created_at", { ascending: true })
+      .range(startIndex, endIndex);
+    
+    needsReviewDocs = paginatedNeedsReview || [];
+    
+    // FALLBACK: If paginated query returned empty but we have docs in main array, use those
+    if (needsReviewDocs.length === 0 && needsReviewFromMain.length > 0) {
+      needsReviewDocs = needsReviewFromMain.slice(startIndex, endIndex + 1);
+    }
+  }
+
   // Filter documents by status (only for active tab)
   const uploadedDocs = activeTab === "active" 
     ? documents?.filter(d => d.status === "uploaded") || []
     : [];
   const processingDocs = activeTab === "active"
     ? documents?.filter(d => d.status === "processing") || []
-    : [];
-  const needsReviewDocs = activeTab === "active"
-    ? documents?.filter(d => d.status === "needs_review") || []
     : [];
   const approvedDocs = activeTab === "active"
     ? documents?.filter(d => d.status === "approved") || []
@@ -65,7 +106,7 @@ export default async function CollecctDashboard({
       : (documents?.filter(d => d.exported_at).length || 0),
     uploaded: uploadedDocs.length,
     processing: processingDocs.length,
-    needsReview: needsReviewDocs.length,
+    needsReview: activeTab === "active" ? needsReviewTotal : 0,
     approved: approvedDocs.length,
     failed: failedDocs.length,
     exported: exportedDocs.length,
@@ -247,7 +288,7 @@ export default async function CollecctDashboard({
         </div>
 
         {/* PRIORITY: Documents Needing Review - SHOW FIRST */}
-        {needsReviewDocs.length > 0 && activeTab === "active" && (
+        {activeTab === "active" && (
           <div id="needs-review-section" className="mb-8">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
@@ -255,12 +296,26 @@ export default async function CollecctDashboard({
                 Behöver granskning
               </h2>
               <p className="text-sm text-gray-500">
-                {needsReviewDocs.length} dokument väntar
+                {needsReviewTotal} dokument väntar
               </p>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {needsReviewDocs.slice(0, 9).map((doc) => {
+            {needsReviewDocs.length === 0 ? (
+              <div className="bg-white rounded-lg border-2 border-dashed border-yellow-300 p-16 text-center">
+                <div className="inline-flex items-center justify-center w-16 h-16 bg-yellow-50 rounded-full mb-4">
+                  <FileText className="w-8 h-8 text-yellow-600" />
+                </div>
+                <h3 className="text-xl font-semibold text-gray-900 mb-2">
+                  Inga dokument behöver granskning
+                </h3>
+                <p className="text-gray-600">
+                  Alla dokument är granskade eller väntar på bearbetning.
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {needsReviewDocs.map((doc) => {
                 const validation = doc.extracted_data?._validation;
                 const completeness = validation?.completeness || 100;
                 const materialCount = doc.extracted_data?.lineItems?.length || doc.extracted_data?.rows?.length || 0;
@@ -338,12 +393,20 @@ export default async function CollecctDashboard({
                     </div>
                   </div>
                 );
-              })}
-            </div>
-            {needsReviewDocs.length > 9 && (
-              <p className="text-center text-sm text-gray-500 mt-4">
-                + {needsReviewDocs.length - 9} fler dokument som behöver granskning
-              </p>
+                  })}
+                </div>
+                
+                {/* Pagination */}
+                {needsReviewTotal >= itemsPerPage && (
+                  <Pagination
+                    currentPage={currentPage}
+                    totalPages={Math.ceil(needsReviewTotal / itemsPerPage)}
+                    totalItems={needsReviewTotal}
+                    itemsPerPage={itemsPerPage}
+                    onPageSizeChange={() => {}}
+                  />
+                )}
+              </>
             )}
           </div>
         )}
@@ -411,22 +474,33 @@ export default async function CollecctDashboard({
                             </p>
                           </div>
                         </div>
-                        {/* Status Badge */}
-                        <div className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-all ${
-                          doc.status === 'uploaded' ? 'bg-blue-100 text-blue-800' :
-                          doc.status === 'processing' ? 'bg-blue-100 text-blue-800 animate-pulse' :
-                          doc.status === 'needs_review' ? 'bg-yellow-100 text-yellow-800' :
-                          doc.status === 'approved' ? 'bg-green-100 text-green-800' :
-                          doc.status === 'exported' ? 'bg-purple-100 text-purple-800' :
-                          doc.status === 'error' ? 'bg-red-100 text-red-800' :
-                          'bg-gray-100 text-gray-800'
-                        }`}>
-                          {doc.status === 'uploaded' && 'Uppladdad'}
-                          {doc.status === 'processing' && '🔄 Behandlar...'}
-                          {doc.status === 'needs_review' && 'Behöver granskning'}
-                          {doc.status === 'approved' && '✅ Godkänd'}
-                          {doc.status === 'exported' && '📤 Exporterad'}
-                          {doc.status === 'error' && '❌ Fel'}
+                        <div className="flex items-center gap-2">
+                          {/* Status Badge */}
+                          <div className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-all ${
+                            doc.status === 'uploaded' ? 'bg-blue-100 text-blue-800' :
+                            doc.status === 'processing' ? 'bg-blue-100 text-blue-800 animate-pulse' :
+                            doc.status === 'needs_review' ? 'bg-yellow-100 text-yellow-800' :
+                            doc.status === 'approved' ? 'bg-green-100 text-green-800' :
+                            doc.status === 'exported' ? 'bg-purple-100 text-purple-800' :
+                            doc.status === 'error' ? 'bg-red-100 text-red-800' :
+                            'bg-gray-100 text-gray-800'
+                          }`}>
+                            {doc.status === 'uploaded' && 'Uppladdad'}
+                            {doc.status === 'processing' && '🔄 Behandlar...'}
+                            {doc.status === 'needs_review' && 'Behöver granskning'}
+                            {doc.status === 'approved' && '✅ Godkänd'}
+                            {doc.status === 'exported' && '📤 Exporterad'}
+                            {doc.status === 'error' && '❌ Fel'}
+                          </div>
+                          {/* Delete Button - only show for non-exported documents */}
+                          {doc.status !== 'exported' && (
+                            <DeleteDocumentButton
+                              documentId={doc.id}
+                              storagePath={doc.storage_path}
+                              filename={doc.filename}
+                              variant="icon"
+                            />
+                          )}
                         </div>
                       </div>
                     </div>

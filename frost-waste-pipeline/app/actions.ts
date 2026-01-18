@@ -306,8 +306,9 @@ async function processDocument(documentId: string) {
 /**
  * RE-VERIFY DOCUMENT (AI Dubbelkoll)
  * Reruns AI extraction on an existing document
+ * @param customInstructions - Optional extra instructions from user to guide the AI
  */
-export async function reVerifyDocument(documentId: string) {
+export async function reVerifyDocument(documentId: string, customInstructions?: string) {
   const supabase = createServiceRoleClient();
   const { data: doc } = await supabase.from("documents").select("*").eq("id", documentId).single();
   if (!doc) throw new Error("Dokument hittades inte");
@@ -378,7 +379,10 @@ export async function reVerifyDocument(documentId: string) {
               2. Extrahera rader från SMAKPROVET. Returnera MAX 15 RADER i JSON. Försök inte returnera hela filen.
               3. Farligt avfall: Sätt "isHazardous": true om det är elektronik, kemikalier, asbest etc.
               4. Adress per rad: Om tabellen har kolumner som "Hämtställe", "Littera" eller "Projekt", extrahera dessa per rad.
-
+${customInstructions ? `
+              EXTRA INSTRUKTIONER FRÅN ANVÄNDAREN (HÖGSTA PRIORITET):
+              ${customInstructions}
+` : ''}
               JSON OUTPUT:
               {
                 "date": { "value": "YYYY-MM-DD", "confidence": Number },
@@ -462,6 +466,7 @@ export async function saveDocument(formData: FormData) {
   }
   
   const existingData = existingDoc.extracted_data || {};
+  const existingLineItems = existingData.lineItems || [];
   
   // Get edited document metadata from form
   const editedDate = formData.get("date") as string;
@@ -469,7 +474,7 @@ export async function saveDocument(formData: FormData) {
   const editedAddress = formData.get("address") as string;
   const editedReceiver = formData.get("receiver") as string;
   
-  // Get lineItems from form
+  // Get lineItems from form, MERGING with existing data to preserve extra fields
   const lineItems: any[] = [];
   let index = 0;
   while (formData.get(`lineItems[${index}].material`) !== null) {
@@ -483,15 +488,22 @@ export async function saveDocument(formData: FormData) {
     const co2Saved = parseFloat(formData.get(`lineItems[${index}].co2Saved`) as string || "0");
     
     if (material || weightKg > 0) {
+      // PRESERVE: Start with original line item data (if exists) to keep extra fields
+      // like wasteCode, costSEK, referensnummer, fordon, date, unit, etc.
+      const originalItem = existingLineItems[index] || {};
+      
+      // Merge: original fields + edited fields (edited fields take priority)
       lineItems.push({
+        ...originalItem, // Keep ALL original fields (date, wasteCode, costSEK, unit, etc.)
+        // Override with edited values from form:
         material: { value: material || "", confidence: 1 },
         weightKg: { value: weightKg, confidence: 1 },
-        address: address ? { value: address, confidence: 1 } : undefined,
-        location: location ? { value: location, confidence: 1 } : undefined,
-        receiver: receiver ? { value: receiver, confidence: 1 } : undefined,
-        handling: handling ? { value: handling, confidence: 1 } : undefined,
+        address: address ? { value: address, confidence: 1 } : originalItem.address,
+        location: location ? { value: location, confidence: 1 } : originalItem.location,
+        receiver: receiver ? { value: receiver, confidence: 1 } : originalItem.receiver,
+        handling: handling ? { value: handling, confidence: 1 } : originalItem.handling,
         isHazardous: { value: isHazardous, confidence: 1 },
-        co2Saved: co2Saved > 0 ? { value: co2Saved, confidence: 1 } : undefined,
+        co2Saved: co2Saved > 0 ? { value: co2Saved, confidence: 1 } : originalItem.co2Saved,
       });
     }
     index++;
@@ -542,20 +554,8 @@ export async function saveDocument(formData: FormData) {
   revalidatePath("/collecct");
   revalidatePath(`/review/${id}`);
   
-  // HITTA NÄSTA DOKUMENT ATT GRANSKA (Spara & Nästa) ⏭️
-  const { data: nextDoc } = await supabase
-    .from("documents")
-    .select("id")
-    .eq("status", "needs_review")
-    .neq("id", id) // Inte det vi just sparade
-    .limit(1)
-    .single();
-
-  if (nextDoc) {
-    redirect(`/review/${nextDoc.id}`);
-  } else {
-    redirect("/collecct");
-  }
+  // Return success - let the client handle navigation
+  return { success: true, documentId: id };
 }
 // (Behåll övriga exporterade funktioner)
 export async function deleteDocument(formData: FormData) {
@@ -566,6 +566,7 @@ export async function deleteDocument(formData: FormData) {
     await supabase.from("documents").delete().eq("id", id);
     revalidatePath("/");
     revalidatePath("/archive");
+    revalidatePath("/collecct");
   }
 export async function toggleArchive(formData: FormData) {
     const supabase = createServiceRoleClient();

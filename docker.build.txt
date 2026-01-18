@@ -1,0 +1,18 @@
+docker build `
+  --build-arg NEXT_PUBLIC_APP_URL=https://collecct-unstructured-waste-pipeline-demo.azurewebsites.net `
+  --build-arg NEXT_PUBLIC_SUPABASE_URL=https://slobvlgpodpwpvwyddsb.supabase.co `
+  --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNsb2J2bGdwb2Rwd3B2d3lkZHNiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjcyNjY5NjIsImV4cCI6MjA4Mjg0Mjk2Mn0.5ckdSZmrKsvqAUPSNoMsOezR9dH2CDFgjk5AjZWgg7A `
+  -t simplitics1/frost-waste-pipeline:latest `
+  -f frost-waste-pipeline/Dockerfile `
+  frost-waste-pipeline
+
+
+
+  docker build `
+  --build-arg NEXT_PUBLIC_APP_URL=https://collecct-wastedata-parser.azurewebsites.net `
+  --build-arg NEXT_PUBLIC_SUPABASE_URL=https://slobvlgpodpwpvwyddsb.supabase.co `
+  --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNsb2J2bGdwb2Rwd3B2d3lkZHNiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjcyNjY5NjIsImV4cCI6MjA4Mjg0Mjk2Mn0.5ckdSZmrKsvqAUPSNoMsOezR9dH2CDFgjk5AjZWgg7A `
+  -t simplitics1/frost-waste-pipeline:collecct `
+  -f frost-waste-pipeline/Dockerfile `
+  frost-waste-pipeline
+  

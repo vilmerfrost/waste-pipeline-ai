@@ -30,24 +30,54 @@ export class AzureBlobConnector {
   }
 
   /**
-   * List all files from failed containers
-   * Checks containers: unable-to-process and unsupported-file-format
+   * List all files from configured input folders
+   * @param customFolders - Array of {container, folder, enabled} to check. REQUIRED - no defaults.
+   *                        container: The blob container name (e.g., "arrivalwastedata")
+   *                        folder: Optional folder path within container (e.g., "output/unable_to_process")
    */
-  async listFailedFiles(): Promise<FileInfo[]> {
+  async listFailedFiles(customFolders?: Array<{container: string; folder: string; enabled?: boolean}>): Promise<FileInfo[]> {
     const allFailedFiles: FileInfo[] = [];
     
-    // Check both containers
-    const failedContainers = [
-      'unable-to-process',
-      'unsupported-file-format'
-    ];
+    // Validate that we have folders to check
+    if (!customFolders || customFolders.length === 0) {
+      console.warn("⚠️ No input folders configured. Please configure folders in settings.");
+      return allFailedFiles;
+    }
     
-    for (const containerName of failedContainers) {
+    // Filter to enabled folders only
+    const foldersToCheck = customFolders
+      .filter(f => f.enabled !== false && f.container)
+      .map(f => ({
+        container: f.container.trim(),
+        folder: (f.folder || "").trim()
+      }));
+    
+    if (foldersToCheck.length === 0) {
+      console.warn("⚠️ No enabled input folders found. Please enable at least one folder in settings.");
+      return allFailedFiles;
+    }
+    
+    console.log(`📂 Checking ${foldersToCheck.length} configured folder(s)...`);
+    
+    for (const { container: containerName, folder } of foldersToCheck) {
+      const locationLabel = folder ? `${containerName}/${folder}` : containerName;
+      console.log(`  🔍 Scanning: ${locationLabel}`);
+      
       try {
         const containerClient = this.blobServiceClient.getContainerClient(containerName);
         
-        // List all blobs in this container
-        for await (const blob of containerClient.listBlobsFlat()) {
+        // Check if container exists first
+        const containerExists = await containerClient.exists();
+        if (!containerExists) {
+          console.error(`  ❌ Container "${containerName}" does not exist. Check your Azure storage settings.`);
+          continue;
+        }
+        
+        // List blobs - if folder is specified, use it as prefix
+        const listOptions = folder ? { prefix: folder + "/" } : {};
+        let fileCountInThisLocation = 0;
+        
+        for await (const blob of containerClient.listBlobsFlat(listOptions)) {
           // Skip folder markers
           if (blob.name.endsWith("/")) continue;
           
@@ -63,16 +93,19 @@ export class AzureBlobConnector {
           };
           
           allFailedFiles.push(fileInfo);
+          fileCountInThisLocation++;
         }
         
-        console.log(`✅ Found ${allFailedFiles.length} files in ${containerName}`);
+        console.log(`  ✅ Found ${fileCountInThisLocation} files in ${locationLabel}`);
         
-      } catch (error) {
-        console.error(`❌ Error listing files in ${containerName}:`, error);
+      } catch (error: any) {
+        console.error(`  ❌ Error listing files in ${locationLabel}:`, error?.message || error);
+        // Continue with other folders instead of failing completely
         continue;
       }
     }
     
+    console.log(`📊 Total files found: ${allFailedFiles.length}`);
     return allFailedFiles;
   }
 
@@ -155,21 +188,32 @@ export class AzureBlobConnector {
   }
 
   /**
-   * Upload Excel file to "completed" container
-   * This is what was MISSING!
+   * Upload Excel file to output container/folder
+   * @param fileName - Name of the file to upload
+   * @param fileContent - File content as Buffer
+   * @param contentType - MIME type of the file
+   * @param outputPath - Optional output path (container or container/folder). Defaults to "completed"
    */
   async uploadToCompleted(
     fileName: string, 
     fileContent: Buffer,
-    contentType: string = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    contentType: string = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    outputPath?: string
   ): Promise<string> {
-    const OUTPUT_CONTAINER = "completed";
-    const containerClient = this.blobServiceClient.getContainerClient(OUTPUT_CONTAINER);
+    // Parse output path - can be "container" or "container/folder"
+    const pathToUse = outputPath || "completed";
+    const pathParts = pathToUse.split("/");
+    const containerName = pathParts[0];
+    const folderPath = pathParts.slice(1).join("/");
+    
+    const containerClient = this.blobServiceClient.getContainerClient(containerName);
     
     // Ensure container exists
     await containerClient.createIfNotExists();
 
-    const blockBlobClient = containerClient.getBlockBlobClient(fileName);
+    // Build full blob path
+    const blobPath = folderPath ? `${folderPath}/${fileName}` : fileName;
+    const blockBlobClient = containerClient.getBlockBlobClient(blobPath);
     
     // Convert Buffer to Uint8Array for upload
     const uint8Array = new Uint8Array(fileContent);
@@ -180,7 +224,7 @@ export class AzureBlobConnector {
       }
     });
 
-    console.log(`✅ Uploaded to Azure: ${OUTPUT_CONTAINER}/${fileName}`);
+    console.log(`✅ Uploaded to Azure: ${containerName}/${blobPath}`);
     
     return blockBlobClient.url;
   }
