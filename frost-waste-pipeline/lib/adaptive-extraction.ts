@@ -147,6 +147,18 @@ Priority order for ambiguous matches:
 - MATERIAL: Material > Fraktion > Avfallstyp (or equivalents)
 - WEIGHT: Vikt > Kvantitet > Mängd (or equivalents)
 
+═══════════════════════════════════════════════════════════════════════════════
+HEADER PERIOD DETECTION
+═══════════════════════════════════════════════════════════════════════════════
+Look for period indicators in document title/header rows (first few rows before data):
+- Quarter notation: "Q1", "Q2", "Q3", "Q4", "Kvartal 1", "Kvartal 2", etc.
+- Date ranges: "2025-01-01 - 2025-03-31", "Period: 2025-01-01 till 2025-03-31"
+- Month ranges: "januari - mars 2025", "jan-mar 2025", "Rapport Q3 2025"
+- Single periods: "Q3 2025", "Kvartal 3 2025"
+
+If found, extract the period string as-is (e.g., "Q3 2025" or "2025-01-01 - 2025-03-31").
+This will be used as a fallback date when row-level dates are missing.
+
 COMPACT SWEDISH REFERENCE:
 ${columnLookup}
 
@@ -162,6 +174,7 @@ JSON OUTPUT (no markdown, no backticks):
   "receiverColumn": "matched column name or null",
   "hazardousColumn": "matched column name or null",
   "costColumn": null,
+  "headerPeriod": "Q3 2025" or "2025-01-01 - 2025-03-31" or null,
   "confidence": 0.95,
   "translations": [
     {"originalColumn": "Vægt", "detectedLanguage": "Danish", "mappedTo": "Amount", "swedishEquivalent": "Vikt"}
@@ -190,6 +203,9 @@ JSON OUTPUT (no markdown, no backticks):
     console.log(`  Location: ${analysis.locationColumn || 'NOT FOUND'}`);
     console.log(`  Material: ${analysis.materialColumn || 'NOT FOUND'}`);
     console.log(`  Weight: ${analysis.weightColumn || 'NOT FOUND'}`);
+    if (analysis.headerPeriod) {
+      console.log(`  Header Period: ${analysis.headerPeriod}`);
+    }
     
     // Log any translations detected
     if (analysis.translations && analysis.translations.length > 0) {
@@ -212,6 +228,7 @@ JSON OUTPUT (no markdown, no backticks):
       unitColumn: null,
       receiverColumn: null,
       costColumn: null,
+      headerPeriod: null,
       confidence: 0.3
     };
   }
@@ -930,6 +947,76 @@ export async function extractAdaptive(
   const dateMatch = cleanFilename.match(/(\d{4}[-_]\d{2}[-_]\d{2})/);
   const documentDate = dateMatch ? dateMatch[1].replace(/[-_]/g, '-') : null;
   
+  // Helper to parse header periods (Q1-Q4, date ranges) to last date of period
+  function parseHeaderPeriod(periodString: string | null | undefined, yearHint?: number): string | null {
+    if (!periodString) return null;
+    
+    const period = periodString.trim();
+    if (!period) return null;
+    
+    // Extract year from period string or use hint
+    const yearMatch = period.match(/\b(20\d{2})\b/);
+    const year = yearMatch ? parseInt(yearMatch[1]) : (yearHint || new Date().getFullYear());
+    
+    // Quarter notation: Q1, Q2, Q3, Q4, Kvartal 1, etc.
+    const quarterMatch = period.match(/\b(?:Q|Kvartal|kvartal)\s*([1-4])\b/i);
+    if (quarterMatch) {
+      const quarter = parseInt(quarterMatch[1]);
+      // Q1: March 31, Q2: June 30, Q3: September 30, Q4: December 31
+      const quarterEndMonths = [3, 6, 9, 12];
+      const quarterEndDays = [31, 30, 30, 31];
+      const month = quarterEndMonths[quarter - 1];
+      const day = quarterEndDays[quarter - 1];
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+    
+    // Date range: "2025-01-01 - 2025-03-31" or "2025-01-01 till 2025-03-31"
+    const dateRangeMatch = period.match(/(\d{4}-\d{2}-\d{2})\s*(?:-|till|to)\s*(\d{4}-\d{2}-\d{2})/i);
+    if (dateRangeMatch) {
+      // Return the last date (end date)
+      return dateRangeMatch[2];
+    }
+    
+    // Month range: "januari - mars 2025" or "jan-mar 2025"
+    const swedishMonths: { [key: string]: number } = {
+      'januari': 1, 'jan': 1, 'februari': 2, 'feb': 2,
+      'mars': 3, 'mar': 3, 'april': 4, 'apr': 4,
+      'maj': 5, 'may': 5, 'juni': 6, 'jun': 6,
+      'juli': 7, 'jul': 7, 'augusti': 8, 'aug': 8,
+      'september': 9, 'sep': 9, 'oktober': 10, 'okt': 10,
+      'november': 11, 'nov': 11, 'december': 12, 'dec': 12
+    };
+    
+    const monthRangeMatch = period.match(/(\w+)\s*(?:-|till|to)\s*(\w+)(?:\s+(\d{4}))?/i);
+    if (monthRangeMatch) {
+      const startMonth = monthRangeMatch[1].toLowerCase();
+      const endMonth = monthRangeMatch[2].toLowerCase();
+      const rangeYear = monthRangeMatch[3] ? parseInt(monthRangeMatch[3]) : year;
+      
+      if (swedishMonths[startMonth] && swedishMonths[endMonth]) {
+        const endMonthNum = swedishMonths[endMonth];
+        // Get last day of end month
+        const lastDay = new Date(rangeYear, endMonthNum, 0).getDate();
+        return `${rangeYear}-${String(endMonthNum).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+      }
+    }
+    
+    // Single month: "mars 2025" -> last day of March
+    const singleMonthMatch = period.match(/(\w+)(?:\s+(\d{4}))?/i);
+    if (singleMonthMatch) {
+      const monthName = singleMonthMatch[1].toLowerCase();
+      const monthYear = singleMonthMatch[2] ? parseInt(singleMonthMatch[2]) : year;
+      
+      if (swedishMonths[monthName]) {
+        const monthNum = swedishMonths[monthName];
+        const lastDay = new Date(monthYear, monthNum, 0).getDate();
+        return `${monthYear}-${String(monthNum).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+      }
+    }
+    
+    return null;
+  }
+  
   // Helper to parse Excel dates (handles serial dates)
   function parseExcelDate(value: any): string | null {
     if (!value) return null;
@@ -947,48 +1034,68 @@ export async function extractAdaptive(
   }
   
   // Helper to validate and fix dates
-  function validateAndFixDate(extractedDate: string | null, filenameDate: string | null): string {
+  // Priority: rowDate > headerPeriodDate > filenameDate > today
+  function validateAndFixDate(
+    extractedDate: string | null, 
+    headerPeriodDate: string | null, 
+    filenameDate: string | null
+  ): string {
     const today = new Date().toISOString().split('T')[0];
     
-    if (!extractedDate) {
-      return filenameDate || today;
+    // PRIMARY: Use row-level date if present and valid
+    if (extractedDate) {
+      const parsed = parseExcelDate(extractedDate);
+      if (parsed) {
+        const extractedDateObj = new Date(parsed);
+        const todayObj = new Date(today);
+        
+        // Sanity check: reject dates more than 2 years old or in the future
+        const twoYearsAgo = new Date();
+        twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
+        
+        if (extractedDateObj >= twoYearsAgo && extractedDateObj <= todayObj) {
+          // Log info if dates differ (for debugging), but DO NOT override
+          if (filenameDate) {
+            const diffDays = Math.abs((extractedDateObj.getTime() - new Date(filenameDate).getTime()) / (1000 * 60 * 60 * 24));
+            if (diffDays > 30) {
+              console.log(`ℹ️  Row date ${parsed} differs from filename date ${filenameDate} by ${diffDays} days (using row date)`);
+            }
+          }
+          return parsed;
+        } else {
+          // Date is invalid (too old or future), fall through to fallbacks
+          console.log(`⚠️  Extracted date ${parsed} seems wrong (too old or future), using fallback`);
+        }
+      }
     }
     
-    const parsed = parseExcelDate(extractedDate);
-    if (!parsed) {
-      return filenameDate || today;
+    // SECONDARY: Use header period date if available
+    if (headerPeriodDate) {
+      return headerPeriodDate;
     }
     
-    // If filename has a date, compare and prefer filename if dates differ significantly
+    // TERTIARY: Use filename date if available
     if (filenameDate) {
-      const extractedDateObj = new Date(parsed);
-      const filenameDateObj = new Date(filenameDate);
-      const todayObj = new Date(today);
-      
-      // If extracted date is more than 2 years old or in the future, use filename date
-      const twoYearsAgo = new Date();
-      twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
-      
-      if (extractedDateObj < twoYearsAgo || extractedDateObj > todayObj) {
-        console.log(`⚠️  Extracted date ${parsed} seems wrong, using filename date ${filenameDate}`);
-        return filenameDate;
-      }
-      
-      // If dates differ by more than 30 days, prefer filename date
-      const diffDays = Math.abs((extractedDateObj.getTime() - filenameDateObj.getTime()) / (1000 * 60 * 60 * 24));
-      if (diffDays > 30) {
-        console.log(`⚠️  Extracted date ${parsed} differs from filename date ${filenameDate} by ${diffDays} days, using filename date`);
-        return filenameDate;
-      }
+      return filenameDate;
     }
     
-    return parsed;
+    // LAST RESORT: Use today's date
+    return today;
+  }
+  
+  // Parse header period date if available
+  const headerPeriodDate = structure.headerPeriod 
+    ? parseHeaderPeriod(structure.headerPeriod) 
+    : null;
+  
+  if (headerPeriodDate) {
+    log(`✓ Header period detected: ${structure.headerPeriod} → ${headerPeriodDate}`, 'info');
   }
   
   // Ensure all items have date and receiver
   const processedItems = allItems.map((item: any) => {
     const itemDate = item.date ? parseExcelDate(item.date) : null;
-    const finalDate = validateAndFixDate(itemDate, documentDate) || new Date().toISOString().split('T')[0];
+    const finalDate = validateAndFixDate(itemDate, headerPeriodDate, documentDate);
     
     return {
       ...item,
