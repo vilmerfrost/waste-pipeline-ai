@@ -18,6 +18,7 @@ import { Breadcrumbs } from "@/components/breadcrumbs";
 import { getReviewBreadcrumbs } from "@/lib/breadcrumb-utils";
 import { truncateFilename } from "@/lib/filename-utils";
 import { DeleteDocumentButton } from "@/components/delete-document-button";
+import { ProcessingLogViewer } from "@/components/processing-log-viewer";
 
 export const dynamic = "force-dynamic";
 
@@ -337,6 +338,17 @@ export default async function ReviewPage({
           </div>
         </div>
 
+        {/* PROCESSING LOG VIEWER */}
+        {extractedData._processingLog && extractedData._processingLog.length > 0 && (
+          <div className="mb-6">
+            <ProcessingLogViewer 
+              documentId={doc.id}
+              filename={doc.filename}
+              showStoredLogs={extractedData._processingLog}
+            />
+          </div>
+        )}
+
         {/* DOCUMENT METADATA */}
         {extractedData.documentMetadata && (
           <div className="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-6">
@@ -647,7 +659,7 @@ export default async function ReviewPage({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
-                    {exportPreviewRows.slice(0, 10).map((row: any) => (
+                    {exportPreviewRows.map((row: any) => (
                       <tr key={row.rowNum} className="hover:bg-green-50">
                         <td className="px-4 py-3 text-sm text-gray-500">{row.rowNum}</td>
                         <td className="px-4 py-3 text-sm font-medium">{row.date}</td>
@@ -670,11 +682,6 @@ export default async function ReviewPage({
                   </tbody>
                 </table>
               </div>
-              {exportPreviewRows.length > 10 && (
-                <div className="px-4 py-3 bg-gray-50 border-t text-sm text-gray-600">
-                  + {exportPreviewRows.length - 10} fler rader...
-                </div>
-              )}
             </div>
             
             {/* Summary of fallbacks applied */}

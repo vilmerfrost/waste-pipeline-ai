@@ -670,10 +670,15 @@ OUTPUT FORMAT (JSON only, no markdown):
 // ============================================================================
 // STEP 3: MAIN ADAPTIVE EXTRACTION FLOW
 // ============================================================================
+
+// Log callback type for streaming logs to client
+export type LogCallback = (message: string, level?: 'info' | 'success' | 'warning' | 'error') => void;
+
 export async function extractAdaptive(
   excelData: any[][],
   filename: string,
-  settings: any
+  settings: any,
+  onLog?: LogCallback
 ): Promise<{
   lineItems: any[];
   metadata: any;
@@ -682,6 +687,7 @@ export async function extractAdaptive(
   uniqueReceivers: number;
   uniqueMaterials: number;
   _validation: any;
+  _processingLog?: string[];
   _verification?: {
     enabled: boolean;
     confidence: number;
@@ -692,9 +698,21 @@ export async function extractAdaptive(
   };
 }> {
   
-  console.log(`\n${"=".repeat(80)}`);
-  console.log(`📊 ADAPTIVE EXTRACTION: ${filename}`);
-  console.log(`${"=".repeat(80)}`);
+  // Log collection for storing in metadata
+  const processingLog: string[] = [];
+  
+  // Helper to log both to console and callback
+  const log = (message: string, level: 'info' | 'success' | 'warning' | 'error' = 'info') => {
+    const timestamp = new Date().toISOString().split('T')[1].split('.')[0];
+    const logEntry = `[${timestamp}] ${message}`;
+    processingLog.push(logEntry);
+    console.log(message);
+    if (onLog) onLog(message, level);
+  };
+  
+  log(`${"=".repeat(60)}`, 'info');
+  log(`📊 ADAPTIVE EXTRACTION: ${filename}`, 'info');
+  log(`${"=".repeat(60)}`, 'info');
   
   // Find header
   let headerIndex = 0;
@@ -704,7 +722,7 @@ export async function extractAdaptive(
       String(cell).toLowerCase().match(/datum|material|vikt|kvantitet|adress/)
     )) {
       headerIndex = i;
-      console.log(`✓ Header found at row ${i + 1}`);
+      log(`✓ Header found at row ${i + 1}`, 'success');
       break;
     }
   }
@@ -715,7 +733,7 @@ export async function extractAdaptive(
   );
   
   const totalRows = dataRows.length;
-  console.log(`✓ Total rows: ${totalRows}`);
+  log(`✓ Total rows: ${totalRows}`, 'success');
   
   if (totalRows === 0) {
     throw new Error("No data rows found");
@@ -737,7 +755,7 @@ export async function extractAdaptive(
   const totalChunks = Math.ceil(totalRows / CHUNK_SIZE);
   const allItems: any[] = [];
   
-  console.log(`\n📦 EXTRACTING: ${totalChunks} chunks of ${CHUNK_SIZE} rows\n`);
+  log(`📦 EXTRACTING: ${totalChunks} chunks of ${CHUNK_SIZE} rows`, 'info');
   
   // Check if verification is enabled (default: false to save costs)
   const enableVerification = settings.enable_verification ?? false;
@@ -794,7 +812,7 @@ export async function extractAdaptive(
     const end = Math.min(start + CHUNK_SIZE, totalRows);
     const chunkRows = dataRows.slice(start, end);
     
-    console.log(`📦 Chunk ${chunkIndex + 1}/${totalChunks}: rows ${start + 1}-${end}`);
+    log(`📦 Chunk ${chunkIndex + 1}/${totalChunks}: rows ${start + 1}-${end}`, 'info');
     
     // Build TSV for this chunk (needed for verification)
     const chunkTsv = [header, ...chunkRows]
@@ -812,8 +830,8 @@ export async function extractAdaptive(
         ? `Extracted 0 items (expected ~${expectedRows} rows)` 
         : `Extraction failed after ${extractionResult.attempts} attempts`;
       
-      console.warn(`   ⚠️  WARNING: Chunk ${chunkIndex + 1} returned 0 items! Expected ~${expectedRows} rows`);
-      console.warn(`   Error: ${errorMsg}`);
+      log(`   ⚠️ WARNING: Chunk ${chunkIndex + 1} returned 0 items! Expected ~${expectedRows} rows`, 'warning');
+      log(`   Error: ${errorMsg}`, 'error');
       
       failedChunks.push({
         chunkIndex: chunkIndex + 1,
@@ -822,7 +840,9 @@ export async function extractAdaptive(
       });
     } else if (items.length < chunkRows.length * 0.5) {
       // Warn if we got less than 50% of expected rows
-      console.warn(`   ⚠️  WARNING: Chunk ${chunkIndex + 1} extracted only ${items.length}/${chunkRows.length} rows (${((items.length/chunkRows.length)*100).toFixed(0)}%)`);
+      log(`   ⚠️ WARNING: Chunk ${chunkIndex + 1} extracted only ${items.length}/${chunkRows.length} rows (${((items.length/chunkRows.length)*100).toFixed(0)}%)`, 'warning');
+    } else {
+      log(`   ✓ Extracted ${items.length} rows`, 'success');
     }
     
     // VERIFICATION STEP (if enabled)
@@ -861,13 +881,13 @@ export async function extractAdaptive(
     ? ((totalChunks - failedChunks.length) / totalChunks) * 100 
     : 100;
   
-  console.log(`\n✅ TOTAL EXTRACTED: ${allItems.length}/${totalRows} rows (${(extractionRate*100).toFixed(0)}%)`);
+  log(`✅ TOTAL EXTRACTED: ${allItems.length}/${totalRows} rows (${(extractionRate*100).toFixed(0)}%)`, 'success');
   
   // Log chunk failure summary
   if (failedChunks.length > 0) {
-    console.log(`\n⚠️  CHUNK FAILURES: ${failedChunks.length}/${totalChunks} chunks failed`);
+    log(`⚠️ CHUNK FAILURES: ${failedChunks.length}/${totalChunks} chunks failed`, 'warning');
     failedChunks.forEach(fc => {
-      console.log(`   - Chunk ${fc.chunkIndex}: ${fc.error} (${fc.attempts} attempts)`);
+      log(`   - Chunk ${fc.chunkIndex}: ${fc.error} (${fc.attempts} attempts)`, 'warning');
     });
   }
   
@@ -888,13 +908,13 @@ export async function extractAdaptive(
     const avgVerificationConfidence = verificationChunks > 0 
       ? verificationConfidenceSum / verificationChunks 
       : 0;
-    console.log(`\n🔍 VERIFICATION SUMMARY:`);
-    console.log(`   Chunks verified: ${verificationChunks}/${totalChunks}`);
-    console.log(`   Items verified: ${totalVerifiedItems}`);
-    console.log(`   Items flagged: ${totalFlaggedItems}`);
-    console.log(`   Hallucinations found: ${allHallucinations.length}`);
-    console.log(`   Avg confidence: ${(avgVerificationConfidence * 100).toFixed(0)}%`);
-    console.log(`   Total time: ${totalVerificationTime}ms`);
+    log(`🔍 VERIFICATION SUMMARY:`, 'info');
+    log(`   Chunks verified: ${verificationChunks}/${totalChunks}`, 'info');
+    log(`   Items verified: ${totalVerifiedItems}`, 'info');
+    log(`   Items flagged: ${totalFlaggedItems}`, 'info');
+    log(`   Hallucinations found: ${allHallucinations.length}`, allHallucinations.length > 0 ? 'warning' : 'info');
+    log(`   Avg confidence: ${(avgVerificationConfidence * 100).toFixed(0)}%`, 'info');
+    log(`   Total time: ${totalVerificationTime}ms`, 'info');
   }
   
   // Infer receiver and date from filename for all items
@@ -1030,31 +1050,31 @@ export async function extractAdaptive(
     finalConfidence = Math.max(0, finalConfidence - hallucinationPenalty);
   }
   
-  console.log(`\n📊 RESULTS:`);
-  console.log(`   Document language: ${structure.detectedLanguage || 'Swedish (assumed)'}`);
+  log(`📊 RESULTS:`, 'info');
+  log(`   Document language: ${structure.detectedLanguage || 'Swedish (assumed)'}`, 'info');
   if (structure.translations && structure.translations.length > 0) {
-    console.log(`   Translations applied: ${structure.translations.length}`);
+    log(`   Translations applied: ${structure.translations.length}`, 'info');
     structure.translations.slice(0, 3).forEach((t: any) => {
-      console.log(`      "${t.originalColumn}" → ${t.mappedTo}`);
+      log(`      "${t.originalColumn}" → ${t.mappedTo}`, 'info');
     });
     if (structure.translations.length > 3) {
-      console.log(`      ... and ${structure.translations.length - 3} more`);
+      log(`      ... and ${structure.translations.length - 3} more`, 'info');
     }
   }
-  console.log(`   Extracted: ${allItems.length}/${totalRows} (${(extractionRate*100).toFixed(0)}%)`);
-  console.log(`   Total rows: ${processedItems.length} (${aggregated.length} unique combinations)`);  
-  console.log(`   Chunk success rate: ${chunkSuccessRate.toFixed(0)}% (${totalChunks - failedChunks.length}/${totalChunks} successful)`);
+  log(`   Extracted: ${allItems.length}/${totalRows} (${(extractionRate*100).toFixed(0)}%)`, extractionRate >= 0.9 ? 'success' : 'warning');
+  log(`   Total rows: ${processedItems.length} (${aggregated.length} unique combinations)`, 'info');
+  log(`   Chunk success rate: ${chunkSuccessRate.toFixed(0)}% (${totalChunks - failedChunks.length}/${totalChunks} successful)`, chunkSuccessRate === 100 ? 'success' : 'warning');
   if (totalRetryAttempts > 0) {
-    console.log(`   Retry attempts: ${totalRetryAttempts}`);
+    log(`   Retry attempts: ${totalRetryAttempts}`, 'warning');
   }
-  console.log(`   Total weight: ${(totalWeight/1000).toFixed(2)} ton`);
-  console.log(`   Unique addresses: ${uniqueAddresses}`);
-  console.log(`   Unique materials: ${uniqueMaterials}`);
-  console.log(`   Confidence: ${(finalConfidence*100).toFixed(0)}%${enableVerification ? ' (verified)' : ''}`);
+  log(`   Total weight: ${(totalWeight/1000).toFixed(2)} ton`, 'info');
+  log(`   Unique addresses: ${uniqueAddresses}`, 'info');
+  log(`   Unique materials: ${uniqueMaterials}`, 'info');
+  log(`   Confidence: ${(finalConfidence*100).toFixed(0)}%${enableVerification ? ' (verified)' : ''}`, finalConfidence >= 0.9 ? 'success' : 'warning');
   if (enableVerification && allHallucinations.length > 0) {
-    console.log(`   ⚠️  Potential issues: ${allHallucinations.length} hallucination(s) detected`);
+    log(`   ⚠️ Potential issues: ${allHallucinations.length} hallucination(s) detected`, 'warning');
   }
-  console.log(`${"=".repeat(80)}\n`);
+  log(`${"=".repeat(60)}`, 'info');
   
   // Build verification metadata
   const verificationMetadata = enableVerification ? {
@@ -1104,6 +1124,7 @@ export async function extractAdaptive(
         timeMs: totalVerificationTime,
       }
     },
+    _processingLog: processingLog,
     totalWeightKg: totalWeight,
     uniqueAddresses,
     uniqueReceivers,
