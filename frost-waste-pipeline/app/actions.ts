@@ -5,7 +5,8 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import Anthropic from "@anthropic-ai/sdk";
 import { WasteRecordSchema } from "@/lib/schemas";
-import * as XLSX from "xlsx"; 
+import * as XLSX from "xlsx";
+import { extractAdaptive } from "@/lib/adaptive-extraction"; 
 
 const STORAGE_BUCKET = "raw_documents";
 
@@ -189,36 +190,58 @@ async function processDocument(documentId: string) {
     let isBigFile = false;
 
     if (doc.filename.endsWith(".xlsx")) {
+      // EXCEL: Use adaptive extraction for ALL rows
       const workbook = XLSX.read(arrayBuffer);
       const sheetName = workbook.SheetNames[0];
       const sheet = workbook.Sheets[sheetName];
+      const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
 
-      console.log("🧮 Räknar totaler via kod...");
-      calculatedTotals = calculateBigDataTotals(sheet);
-      console.log("✅ Kod-Totaler:", calculatedTotals);
-
-      // SÄKERHET: Ta bara de första 25 raderna för AI-analys.
-      // Detta garanterar att vi inte slår i taket för Tokens.
-      const jsonPreview = XLSX.utils.sheet_to_json(sheet, { header: 1 }).slice(0, 25);
-      const csvPreview = jsonPreview.map(row => (row as any[]).join(",")).join("\n");
+      console.log("📊 Using adaptive extraction for full document...");
       
-      isBigFile = true;
+      // Get settings (or use defaults)
+      const { data: settingsData } = await supabase
+        .from("settings")
+        .select("*")
+        .single();
+      const settings = settingsData || {};
 
-      claudeContent.push({ 
-        type: "text", 
-        text: `Här är ett SMAKPROV (första 20 raderna) av en stor Excel-fil:\n${csvPreview}\n\n` + 
-              `MATEMATISKA TOTALER (Redan uträknat): ` + 
-              `Vikt=${calculatedTotals.weight}, Kostnad=${calculatedTotals.cost}.`
-      });
+      // Use adaptive extraction for ALL rows
+      const adaptiveResult = await extractAdaptive(
+        jsonData as any[][],
+        doc.filename,
+        settings
+      );
+
+      // Convert to expected format
+      const extractedData = {
+        ...adaptiveResult,
+        totalCostSEK: 0,
+        documentType: "waste_report",
+      };
+
+      // Determine status based on extraction quality
+      const qualityScore = (adaptiveResult._validation.completeness + (adaptiveResult.metadata?.confidence || 0) * 100) / 2;
+      const status = qualityScore >= 90 ? "approved" : "needs_review";
+      
+      await supabase.from("documents").update({
+        status,
+        extracted_data: extractedData,
+        updated_at: new Date().toISOString()
+      }).eq("id", documentId);
+
+      revalidatePath("/");
+      return;
 
     } else {
+      // PDF: Keep existing Claude Vision processing
       const base64Pdf = Buffer.from(arrayBuffer).toString("base64");
       claudeContent.push({
         type: "document",
         source: { type: "base64", media_type: "application/pdf", data: base64Pdf },
       });
-  }
+    }
 
+    // PDF processing continues here (only reached for non-Excel files)
     const message = await anthropic.messages.create({
       model: "claude-sonnet-4-5-20250929",
       max_tokens: 4096,
@@ -229,11 +252,11 @@ async function processDocument(documentId: string) {
             ...claudeContent as any,
             {
               type: "text",
-              text: `Analysera datan.
+              text: `Analysera PDF-dokumentet.
               
               INSTRUKTIONER:
               1. Hitta Metadata (Leverantör, Datum, Adress).
-              2. Extrahera rader från SMAKPROVET. Returnera MAX 15 RADER i JSON. Försök inte returnera hela filen.
+              2. Extrahera alla rader du kan hitta från dokumentet.
               
               JSON OUTPUT:
               {
@@ -267,24 +290,6 @@ async function processDocument(documentId: string) {
 
     const textContent = message.content[0].type === 'text' ? message.content[0].text : "";
     let rawData = extractJsonFromResponse(textContent);
-
-    // MERGE: Använd de säkra totalerna från koden som FALLBACK
-    // OBS: Vi använder bara beräknade totaler när AI-extraction saknas eller är 0/null
-    // Vi jämför INTE magnitud - AI-extracted värden ska alltid prioriteras
-    if (isBigFile) {
-        // Vikt: Använd beräknad total endast om AI:n inte hittade något eller returnerade 0
-        if (!rawData.weightKg?.value || rawData.weightKg.value === 0) {
-            rawData.weightKg = { value: calculatedTotals.weight, confidence: 1.0 };
-        }
-        // Kostnad: Använd beräknad total endast om AI:n inte hittade något eller returnerade 0
-        if (!rawData.cost?.value || rawData.cost.value === 0) {
-            rawData.cost = { value: calculatedTotals.cost, confidence: 1.0 };
-        }
-        // CO2: Använd beräknad total endast om AI:n inte hittade något
-        if (!rawData.totalCo2Saved?.value && calculatedTotals.co2 > 0) {
-            rawData.totalCo2Saved = { value: calculatedTotals.co2, confidence: 1.0 };
-        }
-    }
 
     const validatedData = WasteRecordSchema.parse({
         ...rawData,
@@ -328,27 +333,56 @@ export async function reVerifyDocument(documentId: string, customInstructions?: 
     let isBigFile = false;
 
     if (doc.filename.endsWith(".xlsx")) {
+      // EXCEL: Use adaptive extraction for ALL rows (re-verify)
       const workbook = XLSX.read(arrayBuffer);
       const sheetName = workbook.SheetNames[0];
       const sheet = workbook.Sheets[sheetName];
+      const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
 
-      console.log("🧮 Räknar totaler via kod (re-verify)...");
-      calculatedTotals = calculateBigDataTotals(sheet);
-      console.log("✅ Kod-Totaler:", calculatedTotals);
-
-      const jsonPreview = XLSX.utils.sheet_to_json(sheet, { header: 1 }).slice(0, 25);
-      const csvPreview = jsonPreview.map(row => (row as any[]).join(",")).join("\n");
+      console.log("📊 Using adaptive extraction for full document (re-verify)...");
       
-      isBigFile = true;
+      // Get settings (or use defaults)
+      const { data: settingsData } = await supabase
+        .from("settings")
+        .select("*")
+        .single();
+      
+      // Merge custom instructions into settings if provided
+      const settings = {
+        ...(settingsData || {}),
+        custom_instructions: customInstructions || settingsData?.custom_instructions
+      };
 
-      claudeContent.push({ 
-        type: "text", 
-        text: `Här är ett SMAKPROV (första 20 raderna) av en stor Excel-fil:\n${csvPreview}\n\n` + 
-              `MATEMATISKA TOTALER (Redan uträknat): ` + 
-              `Vikt=${calculatedTotals.weight}, Kostnad=${calculatedTotals.cost}.`
-      });
+      // Use adaptive extraction for ALL rows
+      const adaptiveResult = await extractAdaptive(
+        jsonData as any[][],
+        doc.filename,
+        settings
+      );
+
+      // Convert to expected format
+      const extractedData = {
+        ...adaptiveResult,
+        totalCostSEK: 0,
+        documentType: "waste_report",
+      };
+
+      // Determine status based on extraction quality
+      const qualityScore = (adaptiveResult._validation.completeness + (adaptiveResult.metadata?.confidence || 0) * 100) / 2;
+      const status = qualityScore >= 90 ? "approved" : "needs_review";
+      
+      await supabase.from("documents").update({
+        status,
+        extracted_data: extractedData,
+        updated_at: new Date().toISOString()
+      }).eq("id", documentId);
+
+      revalidatePath(`/review/${documentId}`);
+      revalidatePath("/");
+      return;
 
     } else {
+      // PDF: Keep existing Claude Vision processing
       const base64Pdf = Buffer.from(arrayBuffer).toString("base64");
       claudeContent.push({
         type: "document",
@@ -356,6 +390,7 @@ export async function reVerifyDocument(documentId: string, customInstructions?: 
       });
     }
 
+    // PDF processing continues here (only reached for non-Excel files)
     const message = await anthropic.messages.create({
       model: "claude-sonnet-4-5-20250929",
       max_tokens: 4096,
@@ -366,7 +401,7 @@ export async function reVerifyDocument(documentId: string, customInstructions?: 
             ...claudeContent as any,
             {
               type: "text",
-              text: `Du är en expert-AI för avfallsrapporter. Analysera dokumentet noggrant.
+              text: `Du är en expert-AI för avfallsrapporter. Analysera PDF-dokumentet noggrant.
 
               ANVÄND DESSA SYNONYMER FÖR ATT HITTA RÄTT KOLUMN:
               - Material: "BEAst-artikel", "Fraktion", "Avfallsslag", "Artikel", "Taxekod", "Restprodukt".
@@ -376,7 +411,7 @@ export async function reVerifyDocument(documentId: string, customInstructions?: 
               
               INSTRUKTIONER:
               1. Hitta Metadata (Leverantör, Datum, Adress).
-              2. Extrahera rader från SMAKPROVET. Returnera MAX 15 RADER i JSON. Försök inte returnera hela filen.
+              2. Extrahera alla rader du kan hitta från dokumentet.
               3. Farligt avfall: Sätt "isHazardous": true om det är elektronik, kemikalier, asbest etc.
               4. Adress per rad: Om tabellen har kolumner som "Hämtställe", "Littera" eller "Projekt", extrahera dessa per rad.
 ${customInstructions ? `
@@ -415,19 +450,6 @@ ${customInstructions ? `
 
     const textContent = message.content[0].type === 'text' ? message.content[0].text : "";
     let rawData = extractJsonFromResponse(textContent);
-
-    // MERGE: Använd de säkra totalerna från koden som FALLBACK
-    if (isBigFile) {
-        if (!rawData.weightKg?.value || rawData.weightKg.value === 0) {
-            rawData.weightKg = { value: calculatedTotals.weight, confidence: 1.0 };
-        }
-        if (!rawData.cost?.value || rawData.cost.value === 0) {
-            rawData.cost = { value: calculatedTotals.cost, confidence: 1.0 };
-        }
-        if (!rawData.totalCo2Saved?.value && calculatedTotals.co2 > 0) {
-            rawData.totalCo2Saved = { value: calculatedTotals.co2, confidence: 1.0 };
-        }
-    }
 
     const validatedData = WasteRecordSchema.parse({
         ...rawData,

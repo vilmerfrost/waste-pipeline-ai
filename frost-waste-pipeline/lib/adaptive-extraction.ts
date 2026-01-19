@@ -220,6 +220,14 @@ JSON OUTPUT (no markdown, no backticks):
 // ============================================================================
 // STEP 2: EXTRACT CHUNK WITH SONNET FALLBACK
 // ============================================================================
+interface ChunkExtractionResult {
+  items: any[];
+  success: boolean;
+  error?: string;
+  model?: string;
+  responseLength?: number;
+}
+
 async function extractChunkWithFallback(
   header: any[],
   chunkRows: any[][],
@@ -228,7 +236,7 @@ async function extractChunkWithFallback(
   chunkNum: number,
   totalChunks: number,
   settings: any
-): Promise<any[]> {
+): Promise<ChunkExtractionResult> {
   
   const tsv = [header, ...chunkRows]
     .map(row => row.map(cell => String(cell || "")).join('\t'))
@@ -326,13 +334,16 @@ CRITICAL:
 3. Convert all weights to kg
 4. Set isHazardous:true if hazardous waste indicator present (Farligt avfall / Farlig avfall / Vaarallinen jäte / Hazardous)`;
 
+  // Get max_tokens from settings or use default
+  const maxTokens = settings.extraction_max_tokens || 16384;
+  
   // TRY 1: Haiku (fast & cheap)
   console.log(`   🔄 Attempt 1: Using Haiku`);
   
   try {
     const haikuResponse = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 8192,
+      max_tokens: maxTokens,
       temperature: 0,
       messages: [{ role: "user", content: prompt }]
     });
@@ -341,6 +352,8 @@ CRITICAL:
       .filter((b: any) => b.type === 'text')
       .map((b: any) => (b as any).text)
       .join('');
+    
+    const responseLength = text.length;
     
     // Aggressive JSON cleaning
     let cleaned = text
@@ -352,15 +365,18 @@ CRITICAL:
     
     // Try multiple JSON parsing strategies
     let parsed: any = null;
+    let parseError: string | undefined;
     try {
       parsed = JSON.parse(cleaned);
     } catch (e1: any) {
+      parseError = `JSON parse failed: ${e1?.message || 'Unknown'}`;
       // Strategy 2: Find first { and last }
       try {
         const firstBrace = cleaned.indexOf('{');
         const lastBrace = cleaned.lastIndexOf('}');
         if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
           parsed = JSON.parse(cleaned.substring(firstBrace, lastBrace + 1));
+          parseError = undefined;
         } else {
           throw new Error("No JSON found");
         }
@@ -373,8 +389,9 @@ CRITICAL:
             cleaned = cleaned.trim() + '"';
           }
           parsed = JSON.parse(cleaned);
+          parseError = undefined;
         } catch (e3: any) {
-          throw new Error(`JSON parse failed: ${e1?.message || 'Unknown'}`);
+          parseError = `JSON parse failed after all strategies: ${e1?.message || 'Unknown'}`;
         }
       }
     }
@@ -383,13 +400,19 @@ CRITICAL:
     
     if (Array.isArray(items) && items.length > 0) {
       console.log(`   ✓ Extracted ${items.length} rows (Haiku)`);
-      return items;
+      return {
+        items,
+        success: true,
+        model: "haiku",
+        responseLength
+      };
     }
     
-    throw new Error("No items in Haiku response");
+    throw new Error(`No items in Haiku response${parseError ? ` - ${parseError}` : ''}`);
     
   } catch (haikuError: any) {
-    console.log(`   ❌ Haiku failed: ${haikuError.message.substring(0, 50)}...`);
+    const errorMsg = haikuError.message || String(haikuError);
+    console.log(`   ❌ Haiku failed: ${errorMsg.substring(0, 100)}...`);
   }
   
   // TRY 2: Sonnet (more reliable but expensive)
@@ -398,7 +421,7 @@ CRITICAL:
   try {
     const sonnetResponse = await anthropic.messages.create({
       model: "claude-sonnet-4-5-20250929",
-      max_tokens: 8192,
+      max_tokens: maxTokens,
       temperature: 0,
       messages: [{ role: "user", content: prompt }]
     });
@@ -407,6 +430,8 @@ CRITICAL:
       .filter((b: any) => b.type === 'text')
       .map((b: any) => (b as any).text)
       .join('');
+    
+    const responseLength = text.length;
     
     let cleaned = text
       .replace(/```json/gi, '')
@@ -417,14 +442,17 @@ CRITICAL:
     
     // Try multiple JSON parsing strategies
     let parsed: any = null;
+    let parseError: string | undefined;
     try {
       parsed = JSON.parse(cleaned);
     } catch (e1: any) {
+      parseError = `JSON parse failed: ${e1?.message || 'Unknown'}`;
       try {
         const firstBrace = cleaned.indexOf('{');
         const lastBrace = cleaned.lastIndexOf('}');
         if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
           parsed = JSON.parse(cleaned.substring(firstBrace, lastBrace + 1));
+          parseError = undefined;
         } else {
           throw new Error("No JSON found");
         }
@@ -436,8 +464,9 @@ CRITICAL:
             cleaned = cleaned.trim() + '"';
           }
           parsed = JSON.parse(cleaned);
+          parseError = undefined;
         } catch (e3: any) {
-          throw new Error(`JSON parse failed: ${e1?.message || 'Unknown'}`);
+          parseError = `JSON parse failed after all strategies: ${e1?.message || 'Unknown'}`;
         }
       }
     }
@@ -446,14 +475,25 @@ CRITICAL:
     
     if (Array.isArray(items) && items.length > 0) {
       console.log(`   ✓ Extracted ${items.length} rows (Sonnet)`);
-      return items;
+      return {
+        items,
+        success: true,
+        model: "sonnet",
+        responseLength
+      };
     }
     
-    throw new Error("No items in Sonnet response");
+    throw new Error(`No items in Sonnet response${parseError ? ` - ${parseError}` : ''}`);
     
   } catch (sonnetError: any) {
-    console.error(`   ❌ Sonnet also failed: ${sonnetError.message.substring(0, 50)}...`);
-    return [];
+    const errorMsg = sonnetError.message || String(sonnetError);
+    console.error(`   ❌ Sonnet also failed: ${errorMsg.substring(0, 100)}...`);
+    return {
+      items: [],
+      success: false,
+      error: errorMsg,
+      responseLength: 0
+    };
   }
 }
 
@@ -688,7 +728,12 @@ export async function extractAdaptive(
   );
   
   // STEP 2: Extract with Sonnet fallback
-  const CHUNK_SIZE = 50;  // Smaller chunks for more reliable extraction
+  // Get configurable settings with defaults
+  const CHUNK_SIZE = settings.extraction_chunk_size || 50;
+  const retryAttempts = settings.extraction_retry_attempts || 2;
+  const minExtractionRate = settings.min_extraction_rate || 0.9;
+  const failOnIncomplete = settings.fail_on_incomplete_extraction || false;
+  
   const totalChunks = Math.ceil(totalRows / CHUNK_SIZE);
   const allItems: any[] = [];
   
@@ -706,6 +751,44 @@ export async function extractAdaptive(
   let verificationConfidenceSum = 0;
   let verificationChunks = 0;
   
+  // Failure tracking
+  const failedChunks: Array<{ chunkIndex: number; error: string; attempts: number }> = [];
+  let totalRetryAttempts = 0;
+  
+  // Helper function to retry chunk extraction with exponential backoff
+  async function extractChunkWithRetry(
+    chunkIndex: number,
+    chunkRows: any[][],
+    chunkTsv: string
+  ): Promise<{ items: any[]; success: boolean; attempts: number }> {
+    for (let attempt = 0; attempt <= retryAttempts; attempt++) {
+      if (attempt > 0) {
+        const backoffMs = Math.min(1000 * Math.pow(2, attempt - 1), 10000); // Max 10s
+        console.log(`   🔄 Retry attempt ${attempt}/${retryAttempts} (waiting ${backoffMs}ms)...`);
+        await new Promise(resolve => setTimeout(resolve, backoffMs));
+        totalRetryAttempts++;
+      }
+      
+      const result = await extractChunkWithFallback(
+        header,
+        chunkRows,
+        structure,
+        filename,
+        chunkIndex + 1,
+        totalChunks,
+        settings
+      );
+      
+      if (result.success && result.items.length > 0) {
+        return { items: result.items, success: true, attempts: attempt + 1 };
+      }
+      
+      lastError = result.error || `Extracted 0 items (expected ~${chunkRows.length})`;
+    }
+    
+    return { items: [], success: false, attempts: retryAttempts + 1 };
+  }
+  
   for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
     const start = chunkIndex * CHUNK_SIZE;
     const end = Math.min(start + CHUNK_SIZE, totalRows);
@@ -718,15 +801,29 @@ export async function extractAdaptive(
       .map(row => row.map(cell => String(cell || "")).join('\t'))
       .join('\n');
     
-    let items = await extractChunkWithFallback(
-      header,
-      chunkRows,
-      structure,
-      filename,
-      chunkIndex + 1,
-      totalChunks,
-      settings
-    );
+    // Extract with retry logic
+    const extractionResult = await extractChunkWithRetry(chunkIndex, chunkRows, chunkTsv);
+    let items = extractionResult.items;
+    
+    // Validate chunk extraction
+    if (!extractionResult.success || items.length === 0) {
+      const expectedRows = chunkRows.length;
+      const errorMsg = extractionResult.success 
+        ? `Extracted 0 items (expected ~${expectedRows} rows)` 
+        : `Extraction failed after ${extractionResult.attempts} attempts`;
+      
+      console.warn(`   ⚠️  WARNING: Chunk ${chunkIndex + 1} returned 0 items! Expected ~${expectedRows} rows`);
+      console.warn(`   Error: ${errorMsg}`);
+      
+      failedChunks.push({
+        chunkIndex: chunkIndex + 1,
+        error: errorMsg,
+        attempts: extractionResult.attempts
+      });
+    } else if (items.length < chunkRows.length * 0.5) {
+      // Warn if we got less than 50% of expected rows
+      console.warn(`   ⚠️  WARNING: Chunk ${chunkIndex + 1} extracted only ${items.length}/${chunkRows.length} rows (${((items.length/chunkRows.length)*100).toFixed(0)}%)`);
+    }
     
     // VERIFICATION STEP (if enabled)
     if (enableVerification && items.length > 0) {
@@ -758,7 +855,33 @@ export async function extractAdaptive(
     allItems.push(...items);
   }
   
-  console.log(`\n✅ TOTAL EXTRACTED: ${allItems.length}/${totalRows} rows (${((allItems.length/totalRows)*100).toFixed(0)}%)`);
+  // Calculate extraction rate
+  const extractionRate = allItems.length / totalRows;
+  const chunkSuccessRate = failedChunks.length > 0 
+    ? ((totalChunks - failedChunks.length) / totalChunks) * 100 
+    : 100;
+  
+  console.log(`\n✅ TOTAL EXTRACTED: ${allItems.length}/${totalRows} rows (${(extractionRate*100).toFixed(0)}%)`);
+  
+  // Log chunk failure summary
+  if (failedChunks.length > 0) {
+    console.log(`\n⚠️  CHUNK FAILURES: ${failedChunks.length}/${totalChunks} chunks failed`);
+    failedChunks.forEach(fc => {
+      console.log(`   - Chunk ${fc.chunkIndex}: ${fc.error} (${fc.attempts} attempts)`);
+    });
+  }
+  
+  // Fail-fast option: throw error if extraction is incomplete
+  if (failOnIncomplete && extractionRate < minExtractionRate) {
+    const missingRows = totalRows - allItems.length;
+    const failedChunksInfo = failedChunks.length > 0 
+      ? ` Failed chunks: ${failedChunks.map(fc => fc.chunkIndex).join(', ')}.`
+      : '';
+    throw new Error(
+      `Extraction incomplete: ${allItems.length}/${totalRows} rows extracted (${(extractionRate*100).toFixed(0)}%). ` +
+      `Minimum required: ${(minExtractionRate*100).toFixed(0)}%. Missing ${missingRows} rows.${failedChunksInfo}`
+    );
+  }
   
   // Log verification summary if enabled
   if (enableVerification) {
@@ -885,8 +1008,7 @@ export async function extractAdaptive(
   const uniqueReceivers = new Set(processedItems.map((item: any) => item.receiver)).size;
   const uniqueMaterials = new Set(processedItems.map((item: any) => item.material)).size;
   
-  // Calculate REAL confidence
-  const extractionRate = allItems.length / totalRows;
+  // Calculate REAL confidence (extractionRate already calculated above)
   const overallConfidence = Math.min(
     structure.confidence,
     extractionRate
@@ -921,6 +1043,10 @@ export async function extractAdaptive(
   }
   console.log(`   Extracted: ${allItems.length}/${totalRows} (${(extractionRate*100).toFixed(0)}%)`);
   console.log(`   Total rows: ${processedItems.length} (${aggregated.length} unique combinations)`);  
+  console.log(`   Chunk success rate: ${chunkSuccessRate.toFixed(0)}% (${totalChunks - failedChunks.length}/${totalChunks} successful)`);
+  if (totalRetryAttempts > 0) {
+    console.log(`   Retry attempts: ${totalRetryAttempts}`);
+  }
   console.log(`   Total weight: ${(totalWeight/1000).toFixed(2)} ton`);
   console.log(`   Unique addresses: ${uniqueAddresses}`);
   console.log(`   Unique materials: ${uniqueMaterials}`);
@@ -960,6 +1086,9 @@ export async function extractAdaptive(
       extractionRate,
       chunked: true,
       chunks: totalChunks,
+      chunkSuccessRate,
+      failedChunks: failedChunks.length > 0 ? failedChunks : undefined,
+      retryAttempts: totalRetryAttempts > 0 ? totalRetryAttempts : undefined,
       model: "adaptive-haiku-sonnet",
       // Language detection and translations
       language: {
@@ -985,6 +1114,9 @@ export async function extractAdaptive(
       issues: [
         ...(allItems.length < totalRows * 0.9 
           ? [`Missing ${totalRows - allItems.length} rows`] 
+          : []),
+        ...(failedChunks.length > 0 
+          ? [`${failedChunks.length} chunk(s) failed: ${failedChunks.map(fc => `chunk ${fc.chunkIndex}`).join(', ')}`] 
           : []),
         ...(allHallucinations.length > 0 
           ? [`${allHallucinations.length} potential hallucination(s) detected`] 
