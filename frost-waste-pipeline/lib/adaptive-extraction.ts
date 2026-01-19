@@ -879,11 +879,11 @@ export async function extractAdaptive(
   }
   
   const aggregated = Array.from(grouped.values());
-  const totalWeight = aggregated.reduce((sum: number, item: any) => sum + (item.weightKg || 0), 0);
+  const totalWeight = processedItems.reduce((sum: number, item: any) => sum + (item.weightKg || 0), 0);
   
-  const uniqueAddresses = new Set(aggregated.map((item: any) => item.location)).size;
-  const uniqueReceivers = new Set(aggregated.map((item: any) => item.receiver)).size;
-  const uniqueMaterials = new Set(aggregated.map((item: any) => item.material)).size;
+  const uniqueAddresses = new Set(processedItems.map((item: any) => item.location)).size;
+  const uniqueReceivers = new Set(processedItems.map((item: any) => item.receiver)).size;
+  const uniqueMaterials = new Set(processedItems.map((item: any) => item.material)).size;
   
   // Calculate REAL confidence
   const extractionRate = allItems.length / totalRows;
@@ -954,7 +954,7 @@ export async function extractAdaptive(
     metadata: {
       totalRows,
       extractedRows: allItems.length,
-      aggregatedRows: aggregated.length,
+      processedRows: processedItems.length,
       structure: structure.columnMapping,
       confidence: finalConfidence,
       extractionRate,

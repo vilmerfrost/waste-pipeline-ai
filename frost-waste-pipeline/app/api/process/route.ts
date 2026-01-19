@@ -900,9 +900,10 @@ export async function GET(req: Request) {
       ? extractedData.metadata.confidence * 100 
       : confidence;
     
+    const rowCount = extractedData.metadata?.processedRows || extractedData.metadata?.aggregatedRows || extractedData.lineItems?.length || 0;
     const aiSummary = completeness >= 95 && overallConfidence >= 90
-      ? `✓ Dokument med ${extractedData.metadata.aggregatedRows} rader från ${extractedData.uniqueAddresses} adresser. Total vikt: ${(extractedData.totalWeightKg/1000).toFixed(2)} ton. Data komplett (${overallConfidence.toFixed(0)}% säkerhet) - redo för godkännande.`
-      : `⚠️ Dokument med ${extractedData.metadata.aggregatedRows} rader. ${(100 - completeness).toFixed(0)}% data saknas, ${overallConfidence.toFixed(0)}% säkerhet - behöver granskning.`;
+      ? `✓ Dokument med ${rowCount} rader från ${extractedData.uniqueAddresses} adresser. Total vikt: ${(extractedData.totalWeightKg/1000).toFixed(2)} ton. Data komplett (${overallConfidence.toFixed(0)}% säkerhet) - redo för godkännande.`
+      : `⚠️ Dokument med ${rowCount} rader. ${(100 - completeness).toFixed(0)}% data saknas, ${overallConfidence.toFixed(0)}% säkerhet - behöver granskning.`;
     
     extractedData.aiSummary = aiSummary;
     
