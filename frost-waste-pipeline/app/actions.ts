@@ -1,7 +1,6 @@
 "use server";
 
 import { createServiceRoleClient } from "../lib/supabase";
-import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import Anthropic from "@anthropic-ai/sdk";
 import { WasteRecordSchema } from "@/lib/schemas";
@@ -149,20 +148,91 @@ function extractJsonFromResponse(text: string) {
   }
 }
 
-// ... uploadAndEnqueueDocument ÄR SAMMA SOM FÖRUT ...
+// --- UPLOAD AND ENQUEUE DOCUMENT WITH BETTER ERROR HANDLING ---
 export async function uploadAndEnqueueDocument(formData: FormData) {
     const supabase = createServiceRoleClient();
     const user = { id: "00000000-0000-0000-0000-000000000000" }; 
     const file = formData.get("file") as File;
-    if (!file || file.size === 0) throw new Error("Ingen fil uppladdad.");
-    const fileExtension = file.name.split(".").pop();
+    
+    // Validate file presence
+    if (!file) {
+      throw new Error("Ingen fil hittades i uppladdningen.");
+    }
+    
+    // Validate file size
+    if (file.size === 0) {
+      throw new Error("Filen är tom (0 bytes). Kontrollera att filen innehåller data.");
+    }
+    
+    // Validate file size limit (50 MB)
+    const MAX_SIZE = 50 * 1024 * 1024;
+    if (file.size > MAX_SIZE) {
+      const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
+      throw new Error(`Filen är för stor (${sizeMB} MB). Max storlek är 50 MB.`);
+    }
+    
+    // Validate file extension
+    const fileExtension = file.name.split(".").pop()?.toLowerCase();
+    const allowedExtensions = ["pdf", "xlsx", "xls"];
+    if (!fileExtension || !allowedExtensions.includes(fileExtension)) {
+      throw new Error(`Filtypen "${fileExtension || 'okänd'}" stöds inte. Endast PDF och Excel (.xlsx, .xls) är tillåtna.`);
+    }
+    
+    // Generate storage path
     const storagePath = `${user.id}/${Date.now()}-${crypto.randomUUID()}.${fileExtension}`;
-    const { error: uploadError } = await supabase.storage.from(STORAGE_BUCKET).upload(storagePath, file, { cacheControl: "3600", upsert: false });
-    if (uploadError) throw new Error("Kunde inte ladda upp filen.");
-    const { data: document, error: documentError } = await supabase.from("documents").insert({ user_id: user.id, filename: file.name, storage_path: storagePath, status: "uploaded" }).select().single();
-    if (documentError) throw new Error("Kunde inte spara i databasen.");
-    try { await processDocument(document.id); } catch (error) { console.error("Process Error:", error); }
+    
+    // Upload to storage
+    const { error: uploadError } = await supabase.storage
+      .from(STORAGE_BUCKET)
+      .upload(storagePath, file, { cacheControl: "3600", upsert: false });
+    
+    if (uploadError) {
+      console.error("Storage upload error:", uploadError);
+      if (uploadError.message?.includes("duplicate")) {
+        throw new Error("En fil med samma namn finns redan. Byt namn på filen och försök igen.");
+      }
+      if (uploadError.message?.includes("size")) {
+        throw new Error("Filen är för stor för lagring. Försök med en mindre fil.");
+      }
+      if (uploadError.message?.includes("quota")) {
+        throw new Error("Lagringsutrymmet är fullt. Kontakta support.");
+      }
+      throw new Error("Kunde inte ladda upp filen till lagring. Försök igen.");
+    }
+    
+    // Save to database
+    const { data: document, error: documentError } = await supabase
+      .from("documents")
+      .insert({ 
+        user_id: user.id, 
+        filename: file.name, 
+        storage_path: storagePath, 
+        status: "uploaded" 
+      })
+      .select()
+      .single();
+    
+    if (documentError) {
+      console.error("Database insert error:", documentError);
+      // Try to clean up the uploaded file
+      await supabase.storage.from(STORAGE_BUCKET).remove([storagePath]).catch(() => {});
+      
+      if (documentError.message?.includes("duplicate")) {
+        throw new Error("Ett dokument med samma namn finns redan i systemet.");
+      }
+      throw new Error("Kunde inte spara dokumentet i databasen. Försök igen.");
+    }
+    
+    // Process document (don't fail the upload if processing fails)
+    try { 
+      await processDocument(document.id); 
+    } catch (error) { 
+      console.error("Process Error (upload succeeded):", error); 
+      // Don't throw - the file is uploaded, processing can be retried
+    }
+    
     revalidatePath("/");
+    revalidatePath("/collecct");
     return { message: "Uppladdat!", documentId: document.id };
 }
 
@@ -257,6 +327,13 @@ async function processDocument(documentId: string) {
               INSTRUKTIONER:
               1. Hitta Metadata (Leverantör, Datum, Adress).
               2. Extrahera alla rader du kan hitta från dokumentet.
+              
+              ⚠️ KRITISKT - DATUM/PERIOD-HANTERING:
+              Om dokumentet visar en PERIOD (datumintervall), extrahera ALLTID SLUTDATUMET!
+              Exempel:
+              - "Period 20251201-20251231" → använd "2025-12-31" (slutdatum!)
+              - "Period: 2025-12-01 - 2025-12-31" → använd "2025-12-31" (slutdatum!)
+              Slutdatumet representerar när arbetet SLUTFÖRDES ("Utförtdatum").
               
               JSON OUTPUT:
               {
@@ -414,6 +491,13 @@ export async function reVerifyDocument(documentId: string, customInstructions?: 
               2. Extrahera alla rader du kan hitta från dokumentet.
               3. Farligt avfall: Sätt "isHazardous": true om det är elektronik, kemikalier, asbest etc.
               4. Adress per rad: Om tabellen har kolumner som "Hämtställe", "Littera" eller "Projekt", extrahera dessa per rad.
+              
+              ⚠️ KRITISKT - DATUM/PERIOD-HANTERING:
+              Om dokumentet visar en PERIOD (datumintervall), extrahera ALLTID SLUTDATUMET!
+              Exempel:
+              - "Period 20251201-20251231" → använd "2025-12-31" (slutdatum!)
+              - "Period: 2025-12-01 - 2025-12-31" → använd "2025-12-31" (slutdatum!)
+              Slutdatumet representerar när arbetet SLUTFÖRDES ("Utförtdatum").
 ${customInstructions ? `
               EXTRA INSTRUKTIONER FRÅN ANVÄNDAREN (HÖGSTA PRIORITET):
               ${customInstructions}
@@ -508,15 +592,17 @@ export async function saveDocument(formData: FormData) {
     const handling = formData.get(`lineItems[${index}].handling`) as string;
     const isHazardous = formData.get(`lineItems[${index}].isHazardous`) === "true";
     const co2Saved = parseFloat(formData.get(`lineItems[${index}].co2Saved`) as string || "0");
+    // ✅ NEW: Get row-specific date
+    const rowDate = formData.get(`lineItems[${index}].date`) as string;
     
     if (material || weightKg > 0) {
       // PRESERVE: Start with original line item data (if exists) to keep extra fields
-      // like wasteCode, costSEK, referensnummer, fordon, date, unit, etc.
+      // like wasteCode, costSEK, referensnummer, fordon, unit, etc.
       const originalItem = existingLineItems[index] || {};
       
       // Merge: original fields + edited fields (edited fields take priority)
       lineItems.push({
-        ...originalItem, // Keep ALL original fields (date, wasteCode, costSEK, unit, etc.)
+        ...originalItem, // Keep ALL original fields (wasteCode, costSEK, unit, etc.)
         // Override with edited values from form:
         material: { value: material || "", confidence: 1 },
         weightKg: { value: weightKg, confidence: 1 },
@@ -526,6 +612,8 @@ export async function saveDocument(formData: FormData) {
         handling: handling ? { value: handling, confidence: 1 } : originalItem.handling,
         isHazardous: { value: isHazardous, confidence: 1 },
         co2Saved: co2Saved > 0 ? { value: co2Saved, confidence: 1 } : originalItem.co2Saved,
+        // ✅ NEW: Save row-specific date (critical for export!)
+        date: rowDate ? { value: rowDate, confidence: 1 } : originalItem.date,
       });
     }
     index++;

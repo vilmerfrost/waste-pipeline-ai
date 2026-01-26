@@ -5,7 +5,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServiceRoleClient } from "@/lib/supabase";
 import ExcelJS from "exceljs";
 import { BlobServiceClient } from "@azure/storage-blob";
-import { AzureBlobConnector } from "@/lib/azure-blob-connector";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300; // 5 minutes max
@@ -19,11 +18,27 @@ function getValue(field: any): any {
   return field;
 }
 
-function cleanLineItem(item: any, documentFilename?: string): any {
-  // Get date from item
+/**
+ * Clean a line item for export
+ * IMPORTANT: documentDate (user-edited or extracted) should be passed as primary fallback
+ * This ensures "What you see in Preview is what you get in Excel"
+ */
+function cleanLineItem(
+  item: any, 
+  documentFilename?: string,
+  documentDate?: string | null  // ✅ NEW: Document-level date from user edits or extraction
+): any {
+  // PRIORITY 1: Individual row date (if set per-row)
   let date = getValue(item.date);
   
-  // If no date, try to extract from document filename
+  // PRIORITY 2: Document-level date (user-edited date from form!)
+  // This is the CRITICAL fix - we must respect the user's edited date
+  if (!date && documentDate) {
+    date = documentDate;
+    console.log(`   📅 Using document-level date: ${date}`);
+  }
+  
+  // PRIORITY 3: Try to extract from document filename
   // Remove (1), (2), etc. before extracting to handle duplicate filenames
   if (!date && documentFilename) {
     const cleanFilename = documentFilename.replace(/\s*\(\d+\)/g, '');
@@ -34,15 +49,10 @@ function cleanLineItem(item: any, documentFilename?: string): any {
     }
   }
   
-  // If still no date, check documentMetadata
-  if (!date && item.documentMetadata?.date) {
-    date = getValue(item.documentMetadata.date);
-  }
-  
-  // If still no date, use today as fallback
+  // PRIORITY 4: LAST RESORT - use today as fallback (should rarely happen)
   if (!date) {
     date = new Date().toISOString().split('T')[0];
-    console.log(`   ⚠️  No date found, using today: ${date}`);
+    console.log(`   ⚠️  No date found anywhere, using today as last resort: ${date}`);
   }
   
   return {
@@ -151,20 +161,40 @@ async function createExcelForDocument(doc: any): Promise<Buffer> {
   // Add data rows from this document
   const lineItems = doc.extracted_data?.lineItems || [];
   
-  // Get document-level date as fallback
-  const documentDate = doc.extracted_data?.documentMetadata?.date 
-    ? getValue(doc.extracted_data.documentMetadata.date)
-    : null;
+  // Get document-level date (PRIORITY ORDER):
+  // 1. User-edited date from documentMetadata (most important - what user sees!)
+  // 2. Top-level date field (AI-extracted)
+  // 3. Extract from filename
+  // 4. Today's date (last resort)
+  let documentDate: string | null = null;
+  
+  // Check documentMetadata first (user-edited values)
+  if (doc.extracted_data?.documentMetadata?.date) {
+    documentDate = getValue(doc.extracted_data.documentMetadata.date);
+  }
+  // Fallback to top-level date field
+  if (!documentDate && doc.extracted_data?.date) {
+    documentDate = getValue(doc.extracted_data.date);
+  }
+  // Fallback to filename extraction
+  if (!documentDate && doc.filename) {
+    const cleanFilename = doc.filename.replace(/\s*\(\d+\)/g, '');
+    const match = cleanFilename.match(/(\d{4}-\d{2}-\d{2})/);
+    if (match) {
+      documentDate = match[1];
+    }
+  }
   
   console.log(`   Processing ${lineItems.length} line items`);
-  console.log(`   Document date fallback: ${documentDate || 'none'}`);
+  console.log(`   Document date (from user/extraction): ${documentDate || 'none'}`);
   
   for (const item of lineItems) {
-    // Pass filename and document date as fallbacks
-    const cleanItem = cleanLineItem(item, doc.filename);
+    // ✅ CRITICAL FIX: Pass document-level date to cleanLineItem
+    // This ensures user-edited date is respected
+    const cleanItem = cleanLineItem(item, doc.filename, documentDate);
     
-    // Use document date if item date is still empty
-    const finalDate = cleanItem.date || documentDate || new Date().toISOString().split('T')[0];
+    // cleanItem.date now already has the correct date with proper fallback chain
+    const finalDate = cleanItem.date;
     
     worksheet.addRow({
       date: finalDate,  // ✅ Will NEVER be empty now!

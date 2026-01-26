@@ -317,6 +317,15 @@ DATE HANDLING
 ═══════════════════════════════════════════════════════════════════════════════
 ⚠️ EXCEL SERIAL DATES: If date is a NUMBER (like 45294), convert it!
    Formula: days since 1899-12-30. Example: 45294 = 2024-01-02
+
+⚠️ CRITICAL - PERIOD/DATE RANGE HANDLING:
+   If the document shows a PERIOD (date range), ALWAYS extract the END DATE!
+   Examples:
+   - "Period 20251201-20251231" → extract "2025-12-31" (END date!)
+   - "Period: 2025-12-01 - 2025-12-31" → extract "2025-12-31" (END date!)
+   - "Perioden 1/12/2025 - 31/12/2025" → extract "2025-12-31" (END date!)
+   
+   The END date represents when the work was COMPLETED ("Utförtdatum").
    
 Recognize date formats in all languages and output as YYYY-MM-DD:
 - "2 jan 2024" / "2. januar 2024" / "2.1.2024" / "Jan 2, 2024" → "2024-01-02"

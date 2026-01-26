@@ -17,7 +17,7 @@ export function ExportActions({ documents }: { documents: any[] }) {
 
   // --- DEN NYA SMARTA DATA-BEREDAREN ---
   const prepareData = () => {
-    let rows: any[] = [];
+    const rows: any[] = [];
 
     // DEMO GUID-mappning (I en riktig app hämtas detta från settings-tabellen)
     const DEMO_GUID_MAP: Record<string, string> = {
@@ -41,9 +41,37 @@ export function ExportActions({ documents }: { documents: any[] }) {
         ? mainAddress.trim() 
         : "";
 
+      // ✅ CRITICAL FIX: Document date priority order
+      // 1. User-edited date (documentMetadata.date) - HIGHEST PRIORITY
+      // 2. Top-level extracted date (data.date)
+      // 3. Extract from filename
+      // 4. Document creation date (doc.created_at) - LAST RESORT
+      let documentDate: string | null = null;
+      
+      // Priority 1: User-edited date from documentMetadata
+      if (data.documentMetadata?.date) {
+        documentDate = getVal(data.documentMetadata.date);
+      }
+      // Priority 2: Top-level extracted date
+      if (!documentDate && data.date) {
+        documentDate = getVal(data.date);
+      }
+      // Priority 3: Extract from filename
+      if (!documentDate && doc.filename) {
+        const cleanFilename = doc.filename.replace(/\s*\(\d+\)/g, '');
+        const match = cleanFilename.match(/(\d{4}-\d{2}-\d{2})/);
+        if (match) {
+          documentDate = match[1];
+        }
+      }
+      // Priority 4: Last resort - creation date (NOT today's date!)
+      if (!documentDate) {
+        documentDate = doc.created_at?.split("T")[0] || new Date().toISOString().split("T")[0];
+      }
+
       // Gemensam data för hela dokumentet
       const baseData = {
-        "Datum": getVal(data.date) || doc.created_at.split("T")[0],
+        "Datum": documentDate, // ✅ Now uses proper priority chain
         "KundID-GUID": customerGuid,
         "Adress": cleanMainAddress, // Använd renad adress
         "Mottagare": getVal(data.receiver) || "",
@@ -59,8 +87,8 @@ export function ExportActions({ documents }: { documents: any[] }) {
       if (lineItems.length > 0) {
         // SCENARIO 1: Vi har detaljerade rader (Line Items)
         lineItems.forEach((item: any) => {
-          // ✅ DATUM PER RAD: Använd datum från lineItem om det finns, annars dokumentets datum
-          const rowDate = getVal(item.date) || getVal(data.date) || doc.created_at.split("T")[0];
+          // ✅ DATUM PER RAD: Use item date if exists, otherwise use document-level date
+          const rowDate = getVal(item.date) || documentDate;
           
           // Försök hitta rad-adress, annars ta huvudadress
           let rowAddr = getVal(item.address);
@@ -84,9 +112,9 @@ export function ExportActions({ documents }: { documents: any[] }) {
         });
       } else {
         // SCENARIO 2: Inga rader (gammal fil eller enkel faktura)
-        const docDate = getVal(data.date) || doc.created_at.split("T")[0];
+        // ✅ Use the same documentDate with proper priority chain
         rows.push({
-          "Datum": docDate, // ✅ ÅÅÅÅ-MM-DD format
+          "Datum": documentDate, // ✅ ÅÅÅÅ-MM-DD format from priority chain
           "Adress": cleanMainAddress || "", // ✅ Hämtställe
           "Material": getVal(data.material) || "Blandat", // ✅ Standardiserad benämning
           "Vikt": formatWeight(Number(getVal(data.weightKg)) || 0), // ✅ Två decimaler, kommatecken
