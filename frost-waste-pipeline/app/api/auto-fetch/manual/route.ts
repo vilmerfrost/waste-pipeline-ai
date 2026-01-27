@@ -121,7 +121,7 @@ export async function POST() {
             filename: fileInfo.name,
             status: "uploaded",
             storage_path: storagePath,
-            azure_original_filename: fileInfo.name, // Track original Azure filename for safe cleanup
+            azure_original_filename: fileInfo.full_path, // Track FULL blob path for safe cleanup (includes folder!)
             source_container: fileInfo.source_folder || (fileInfo.name.endsWith('.pdf') ? 'unsupported-file-format' : 'unable-to-process'), // Track source container
             extracted_data: {
               source: "azure_auto_fetch_manual",

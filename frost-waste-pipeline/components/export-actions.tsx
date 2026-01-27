@@ -15,9 +15,23 @@ export function ExportActions({ documents }: { documents: any[] }) {
     return field;
   };
 
+  // ✅ Helper: Check if a value is a placeholder that should be replaced by document-level value
+  const isPlaceholder = (val: string): boolean => {
+    if (!val || typeof val !== 'string') return true;
+    const trimmed = val.trim().toLowerCase();
+    return (
+      trimmed === '' ||
+      trimmed === 'okänd mottagare' ||
+      trimmed === 'okänd adress' ||
+      trimmed === 'okänt material' ||
+      trimmed === 'saknas' ||
+      trimmed === 'unknown'
+    );
+  };
+
   // --- DEN NYA SMARTA DATA-BEREDAREN ---
   const prepareData = () => {
-    let rows: any[] = [];
+    const rows: any[] = [];
 
     // DEMO GUID-mappning (I en riktig app hämtas detta från settings-tabellen)
     const DEMO_GUID_MAP: Record<string, string> = {
@@ -35,18 +49,48 @@ export function ExportActions({ documents }: { documents: any[] }) {
       // HÄMTA RÄTT GUID (prioritera settings, men ha demo-fallback)
       const customerGuid = DEMO_GUID_MAP[supplierName] || "";
 
-      // ADRESS-LOGIK: Rad > Huvud > Tom (Aldrig "Okänd")
-      const mainAddress = getVal(data.address);
-      const cleanMainAddress = mainAddress && mainAddress !== "Okänd adress" && mainAddress.trim() !== "" 
-        ? mainAddress.trim() 
-        : "";
+      // ✅ Document-level address: User edit > Extracted > Empty
+      const docAddress = getVal(data.documentMetadata?.address) || getVal(data.address);
+      const cleanMainAddress = !isPlaceholder(docAddress) ? docAddress.trim() : "";
+      
+      // ✅ Document-level receiver: User edit > Extracted > Empty
+      const docReceiver = getVal(data.documentMetadata?.receiver) || getVal(data.receiver);
+      const cleanReceiver = !isPlaceholder(docReceiver) ? docReceiver.trim() : "";
+
+      // ✅ CRITICAL FIX: Document date priority order
+      // 1. User-edited date (documentMetadata.date) - HIGHEST PRIORITY
+      // 2. Top-level extracted date (data.date)
+      // 3. Extract from filename
+      // 4. Document creation date (doc.created_at) - LAST RESORT
+      let documentDate: string | null = null;
+      
+      // Priority 1: User-edited date from documentMetadata
+      if (data.documentMetadata?.date) {
+        documentDate = getVal(data.documentMetadata.date);
+      }
+      // Priority 2: Top-level extracted date
+      if (!documentDate && data.date) {
+        documentDate = getVal(data.date);
+      }
+      // Priority 3: Extract from filename
+      if (!documentDate && doc.filename) {
+        const cleanFilename = doc.filename.replace(/\s*\(\d+\)/g, '');
+        const match = cleanFilename.match(/(\d{4}-\d{2}-\d{2})/);
+        if (match) {
+          documentDate = match[1];
+        }
+      }
+      // Priority 4: Last resort - creation date (NOT today's date!)
+      if (!documentDate) {
+        documentDate = doc.created_at?.split("T")[0] || new Date().toISOString().split("T")[0];
+      }
 
       // Gemensam data för hela dokumentet
       const baseData = {
-        "Datum": getVal(data.date) || doc.created_at.split("T")[0],
+        "Datum": documentDate, // ✅ Now uses proper priority chain
         "KundID-GUID": customerGuid,
         "Adress": cleanMainAddress, // Använd renad adress
-        "Mottagare": getVal(data.receiver) || "",
+        "Mottagare": cleanReceiver, // ✅ Uses document-level receiver (user edit or extracted)
         "Leverantör": supplierName,
         "Filnamn": doc.filename
       };
@@ -59,19 +103,16 @@ export function ExportActions({ documents }: { documents: any[] }) {
       if (lineItems.length > 0) {
         // SCENARIO 1: Vi har detaljerade rader (Line Items)
         lineItems.forEach((item: any) => {
-          // ✅ DATUM PER RAD: Använd datum från lineItem om det finns, annars dokumentets datum
-          const rowDate = getVal(item.date) || getVal(data.date) || doc.created_at.split("T")[0];
+          // ✅ DATUM PER RAD: Use item date if exists, otherwise use document-level date
+          const rowDate = getVal(item.date) || documentDate;
           
-          // Försök hitta rad-adress, annars ta huvudadress
-          let rowAddr = getVal(item.address);
-          if (!rowAddr || rowAddr === "Okänd adress" || rowAddr.trim() === "") {
-            rowAddr = cleanMainAddress; // Fallback till huvudadress
-          } else {
-            rowAddr = rowAddr.trim();
-          }
+          // ✅ ADRESS PER RAD: Use row address if NOT placeholder, otherwise document-level
+          const itemAddr = getVal(item.address);
+          const rowAddr = isPlaceholder(itemAddr) ? cleanMainAddress : itemAddr.trim();
 
-          // ✅ MOTTAGARE PER RAD: Använd från lineItem om det finns, annars från dokumentet
-          const rowReceiver = getVal(item.receiver) || getVal(data.receiver) || "";
+          // ✅ MOTTAGARE PER RAD: Use row receiver if NOT placeholder, otherwise document-level
+          const itemReceiver = getVal(item.receiver);
+          const rowReceiver = isPlaceholder(itemReceiver) ? cleanReceiver : itemReceiver.trim();
 
           rows.push({
             "Datum": rowDate, // ✅ ÅÅÅÅ-MM-DD format
@@ -84,9 +125,9 @@ export function ExportActions({ documents }: { documents: any[] }) {
         });
       } else {
         // SCENARIO 2: Inga rader (gammal fil eller enkel faktura)
-        const docDate = getVal(data.date) || doc.created_at.split("T")[0];
+        // ✅ Use the same documentDate with proper priority chain
         rows.push({
-          "Datum": docDate, // ✅ ÅÅÅÅ-MM-DD format
+          "Datum": documentDate, // ✅ ÅÅÅÅ-MM-DD format from priority chain
           "Adress": cleanMainAddress || "", // ✅ Hämtställe
           "Material": getVal(data.material) || "Blandat", // ✅ Standardiserad benämning
           "Vikt": formatWeight(Number(getVal(data.weightKg)) || 0), // ✅ Två decimaler, kommatecken

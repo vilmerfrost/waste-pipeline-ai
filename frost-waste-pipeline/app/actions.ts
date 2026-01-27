@@ -1,11 +1,11 @@
 "use server";
 
 import { createServiceRoleClient } from "../lib/supabase";
-import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import Anthropic from "@anthropic-ai/sdk";
 import { WasteRecordSchema } from "@/lib/schemas";
-import * as XLSX from "xlsx"; 
+import * as XLSX from "xlsx";
+import { extractAdaptive } from "@/lib/adaptive-extraction"; 
 
 const STORAGE_BUCKET = "raw_documents";
 
@@ -148,20 +148,91 @@ function extractJsonFromResponse(text: string) {
   }
 }
 
-// ... uploadAndEnqueueDocument ÄR SAMMA SOM FÖRUT ...
+// --- UPLOAD AND ENQUEUE DOCUMENT WITH BETTER ERROR HANDLING ---
 export async function uploadAndEnqueueDocument(formData: FormData) {
     const supabase = createServiceRoleClient();
     const user = { id: "00000000-0000-0000-0000-000000000000" }; 
     const file = formData.get("file") as File;
-    if (!file || file.size === 0) throw new Error("Ingen fil uppladdad.");
-    const fileExtension = file.name.split(".").pop();
+    
+    // Validate file presence
+    if (!file) {
+      throw new Error("Ingen fil hittades i uppladdningen.");
+    }
+    
+    // Validate file size
+    if (file.size === 0) {
+      throw new Error("Filen är tom (0 bytes). Kontrollera att filen innehåller data.");
+    }
+    
+    // Validate file size limit (50 MB)
+    const MAX_SIZE = 50 * 1024 * 1024;
+    if (file.size > MAX_SIZE) {
+      const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
+      throw new Error(`Filen är för stor (${sizeMB} MB). Max storlek är 50 MB.`);
+    }
+    
+    // Validate file extension
+    const fileExtension = file.name.split(".").pop()?.toLowerCase();
+    const allowedExtensions = ["pdf", "xlsx", "xls"];
+    if (!fileExtension || !allowedExtensions.includes(fileExtension)) {
+      throw new Error(`Filtypen "${fileExtension || 'okänd'}" stöds inte. Endast PDF och Excel (.xlsx, .xls) är tillåtna.`);
+    }
+    
+    // Generate storage path
     const storagePath = `${user.id}/${Date.now()}-${crypto.randomUUID()}.${fileExtension}`;
-    const { error: uploadError } = await supabase.storage.from(STORAGE_BUCKET).upload(storagePath, file, { cacheControl: "3600", upsert: false });
-    if (uploadError) throw new Error("Kunde inte ladda upp filen.");
-    const { data: document, error: documentError } = await supabase.from("documents").insert({ user_id: user.id, filename: file.name, storage_path: storagePath, status: "uploaded" }).select().single();
-    if (documentError) throw new Error("Kunde inte spara i databasen.");
-    try { await processDocument(document.id); } catch (error) { console.error("Process Error:", error); }
+    
+    // Upload to storage
+    const { error: uploadError } = await supabase.storage
+      .from(STORAGE_BUCKET)
+      .upload(storagePath, file, { cacheControl: "3600", upsert: false });
+    
+    if (uploadError) {
+      console.error("Storage upload error:", uploadError);
+      if (uploadError.message?.includes("duplicate")) {
+        throw new Error("En fil med samma namn finns redan. Byt namn på filen och försök igen.");
+      }
+      if (uploadError.message?.includes("size")) {
+        throw new Error("Filen är för stor för lagring. Försök med en mindre fil.");
+      }
+      if (uploadError.message?.includes("quota")) {
+        throw new Error("Lagringsutrymmet är fullt. Kontakta support.");
+      }
+      throw new Error("Kunde inte ladda upp filen till lagring. Försök igen.");
+    }
+    
+    // Save to database
+    const { data: document, error: documentError } = await supabase
+      .from("documents")
+      .insert({ 
+        user_id: user.id, 
+        filename: file.name, 
+        storage_path: storagePath, 
+        status: "uploaded" 
+      })
+      .select()
+      .single();
+    
+    if (documentError) {
+      console.error("Database insert error:", documentError);
+      // Try to clean up the uploaded file
+      await supabase.storage.from(STORAGE_BUCKET).remove([storagePath]).catch(() => {});
+      
+      if (documentError.message?.includes("duplicate")) {
+        throw new Error("Ett dokument med samma namn finns redan i systemet.");
+      }
+      throw new Error("Kunde inte spara dokumentet i databasen. Försök igen.");
+    }
+    
+    // Process document (don't fail the upload if processing fails)
+    try { 
+      await processDocument(document.id); 
+    } catch (error) { 
+      console.error("Process Error (upload succeeded):", error); 
+      // Don't throw - the file is uploaded, processing can be retried
+    }
+    
     revalidatePath("/");
+    revalidatePath("/collecct");
     return { message: "Uppladdat!", documentId: document.id };
 }
 
@@ -188,113 +259,176 @@ async function processDocument(documentId: string) {
     let calculatedTotals = { weight: 0, cost: 0, co2: 0, hazardousCount: 0 };
     let isBigFile = false;
 
-    if (doc.filename.endsWith(".xlsx")) {
+    if (doc.filename.endsWith(".xlsx") || doc.filename.endsWith(".xls")) {
+      // EXCEL: Use adaptive extraction for ALL rows from ALL sheets
       const workbook = XLSX.read(arrayBuffer);
-      const sheetName = workbook.SheetNames[0];
-      const sheet = workbook.Sheets[sheetName];
-
-      console.log("🧮 Räknar totaler via kod...");
-      calculatedTotals = calculateBigDataTotals(sheet);
-      console.log("✅ Kod-Totaler:", calculatedTotals);
-
-      // SÄKERHET: Ta bara de första 25 raderna för AI-analys.
-      // Detta garanterar att vi inte slår i taket för Tokens.
-      const jsonPreview = XLSX.utils.sheet_to_json(sheet, { header: 1 }).slice(0, 25);
-      const csvPreview = jsonPreview.map(row => (row as any[]).join(",")).join("\n");
       
-      isBigFile = true;
+      // ✅ FIX: Process ALL sheets, not just the first one!
+      console.log(`📊 Excel has ${workbook.SheetNames.length} sheet(s): ${workbook.SheetNames.join(', ')}`);
+      
+      let allData: any[][] = [];
+      
+      for (const sheetName of workbook.SheetNames) {
+        const sheet = workbook.Sheets[sheetName];
+        const sheetData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" }) as any[][];
+        
+        if (sheetData.length === 0) continue;
+        
+        console.log(`   📄 Sheet "${sheetName}": ${sheetData.length} rows`);
+        
+        if (allData.length === 0) {
+          allData = sheetData;
+        } else {
+          // Skip header row on subsequent sheets if it looks like a header
+          const firstRowLooksLikeHeader = sheetData[0]?.some((cell: any) => 
+            String(cell).toLowerCase().match(/datum|material|vikt|adress|kvantitet/)
+          );
+          allData = [...allData, ...(firstRowLooksLikeHeader && sheetData.length > 1 ? sheetData.slice(1) : sheetData)];
+        }
+      }
+      
+      const jsonData = allData;
+      console.log(`📊 Using adaptive extraction for ${jsonData.length} rows from all sheets...`);
+      
+      // Get settings (or use defaults)
+      const { data: settingsData } = await supabase
+        .from("settings")
+        .select("*")
+        .single();
+      const settings = settingsData || {};
 
-      claudeContent.push({ 
-        type: "text", 
-        text: `Här är ett SMAKPROV (första 20 raderna) av en stor Excel-fil:\n${csvPreview}\n\n` + 
-              `MATEMATISKA TOTALER (Redan uträknat): ` + 
-              `Vikt=${calculatedTotals.weight}, Kostnad=${calculatedTotals.cost}.`
-      });
+      // Use adaptive extraction for ALL rows
+      const adaptiveResult = await extractAdaptive(
+        jsonData as any[][],
+        doc.filename,
+        settings
+      );
+
+      // Convert to expected format
+      const extractedData = {
+        ...adaptiveResult,
+        totalCostSEK: 0,
+        documentType: "waste_report",
+      };
+
+      // Determine status based on extraction quality
+      const qualityScore = (adaptiveResult._validation.completeness + (adaptiveResult.metadata?.confidence || 0) * 100) / 2;
+      const status = qualityScore >= 90 ? "approved" : "needs_review";
+      
+      await supabase.from("documents").update({
+        status,
+        extracted_data: extractedData,
+        updated_at: new Date().toISOString()
+      }).eq("id", documentId);
+
+      revalidatePath("/");
+      return;
 
     } else {
+      // PDF: Keep existing Claude Vision processing with logging
+      const processingLog: string[] = [];
+      const log = (msg: string) => {
+        const ts = new Date().toISOString().split('T')[1].split('.')[0];
+        processingLog.push(`[${ts}] ${msg}`);
+        console.log(msg);
+      };
+      
+      log(`${"=".repeat(60)}`);
+      log(`📄 PDF EXTRACTION: ${doc.filename}`);
+      log(`${"=".repeat(60)}`);
+      
       const base64Pdf = Buffer.from(arrayBuffer).toString("base64");
+      log(`✓ PDF converted to base64 (${(arrayBuffer.byteLength / 1024).toFixed(0)} KB)`);
+      
       claudeContent.push({
         type: "document",
         source: { type: "base64", media_type: "application/pdf", data: base64Pdf },
       });
-  }
 
-    const message = await anthropic.messages.create({
-      model: "claude-sonnet-4-5-20250929",
-      max_tokens: 4096,
-      messages: [
-        {
-          role: "user",
-          content: [
-            ...claudeContent as any,
-            {
-              type: "text",
-              text: `Analysera datan.
-              
-              INSTRUKTIONER:
-              1. Hitta Metadata (Leverantör, Datum, Adress).
-              2. Extrahera rader från SMAKPROVET. Returnera MAX 15 RADER i JSON. Försök inte returnera hela filen.
-              
-              JSON OUTPUT:
+      log(`📤 Calling Claude Sonnet for PDF OCR...`);
+
+      // PDF processing continues here (only reached for non-Excel files)
+      const message = await anthropic.messages.create({
+        model: "claude-sonnet-4-5-20250929",
+        max_tokens: 4096,
+        messages: [
+          {
+            role: "user",
+            content: [
+              ...claudeContent as any,
               {
-                "date": { "value": "YYYY-MM-DD", "confidence": Number },
-                "supplier": { "value": "String", "confidence": Number },
-                "weightKg": { "value": Number, "confidence": Number },
-                "cost": { "value": Number, "confidence": Number },
-                "totalCo2Saved": { "value": Number, "confidence": Number },
-                "material": { "value": "String (Huvudkategori)", "confidence": Number },
-                "address": { "value": "String", "confidence": Number },
-                "receiver": { "value": "String", "confidence": Number },
-                "lineItems": [
-                  {
-                    "material": { "value": "String", "confidence": Number },
-                    "handling": { "value": "String", "confidence": Number },
-                    "weightKg": { "value": Number, "confidence": Number },
-                    "co2Saved": { "value": Number, "confidence": Number },
-                    "percentage": { "value": "String", "confidence": Number },
-                    "isHazardous": { "value": Boolean, "confidence": Number },
-                    "address": { "value": "String", "confidence": Number },
-                    "receiver": { "value": "String", "confidence": Number }
-                  }
-                ]
-              }
-              Returnera ENDAST ren JSON.`,
-            },
-          ],
-        },
-      ],
-    });
+                type: "text",
+                text: `Analysera PDF-dokumentet.
+                
+                INSTRUKTIONER:
+                1. Hitta Metadata (Leverantör, Datum, Adress).
+                2. Extrahera alla rader du kan hitta från dokumentet.
+                
+                ⚠️ KRITISKT - DATUM/PERIOD-HANTERING:
+                Om dokumentet visar en PERIOD (datumintervall), extrahera ALLTID SLUTDATUMET!
+                Exempel:
+                - "Period 20251201-20251231" → använd "2025-12-31" (slutdatum!)
+                - "Period: 2025-12-01 - 2025-12-31" → använd "2025-12-31" (slutdatum!)
+                Slutdatumet representerar när arbetet SLUTFÖRDES ("Utförtdatum").
+                
+                JSON OUTPUT:
+                {
+                  "date": { "value": "YYYY-MM-DD", "confidence": Number },
+                  "supplier": { "value": "String", "confidence": Number },
+                  "weightKg": { "value": Number, "confidence": Number },
+                  "cost": { "value": Number, "confidence": Number },
+                  "totalCo2Saved": { "value": Number, "confidence": Number },
+                  "material": { "value": "String (Huvudkategori)", "confidence": Number },
+                  "address": { "value": "String", "confidence": Number },
+                  "receiver": { "value": "String", "confidence": Number },
+                  "lineItems": [
+                    {
+                      "material": { "value": "String", "confidence": Number },
+                      "handling": { "value": "String", "confidence": Number },
+                      "weightKg": { "value": Number, "confidence": Number },
+                      "co2Saved": { "value": Number, "confidence": Number },
+                      "percentage": { "value": "String", "confidence": Number },
+                      "isHazardous": { "value": Boolean, "confidence": Number },
+                      "address": { "value": "String", "confidence": Number },
+                      "receiver": { "value": "String", "confidence": Number }
+                    }
+                  ]
+                }
+                Returnera ENDAST ren JSON.`,
+              },
+            ],
+          },
+        ],
+      });
 
-    const textContent = message.content[0].type === 'text' ? message.content[0].text : "";
-    let rawData = extractJsonFromResponse(textContent);
+      log(`✓ Claude response received`);
 
-    // MERGE: Använd de säkra totalerna från koden som FALLBACK
-    // OBS: Vi använder bara beräknade totaler när AI-extraction saknas eller är 0/null
-    // Vi jämför INTE magnitud - AI-extracted värden ska alltid prioriteras
-    if (isBigFile) {
-        // Vikt: Använd beräknad total endast om AI:n inte hittade något eller returnerade 0
-        if (!rawData.weightKg?.value || rawData.weightKg.value === 0) {
-            rawData.weightKg = { value: calculatedTotals.weight, confidence: 1.0 };
+      const textContent = message.content[0].type === 'text' ? message.content[0].text : "";
+      let rawData = extractJsonFromResponse(textContent);
+      
+      log(`✓ JSON parsed successfully`);
+
+      const validatedData = WasteRecordSchema.parse({
+          ...rawData,
+          lineItems: rawData.lineItems || [],
+          _processingLog: processingLog  // ✅ Include processing log
+      });
+      
+      const lineItemCount = validatedData.lineItems?.length || 0;
+      log(`✅ PDF extraction complete: ${lineItemCount} line items extracted`);
+      log(`${"=".repeat(60)}`);
+
+      await supabase.from("documents").update({
+        status: "needs_review",
+        extracted_data: {
+          ...validatedData,
+          _processingLog: processingLog  // ✅ Include processing log in saved data
         }
-        // Kostnad: Använd beräknad total endast om AI:n inte hittade något eller returnerade 0
-        if (!rawData.cost?.value || rawData.cost.value === 0) {
-            rawData.cost = { value: calculatedTotals.cost, confidence: 1.0 };
-        }
-        // CO2: Använd beräknad total endast om AI:n inte hittade något
-        if (!rawData.totalCo2Saved?.value && calculatedTotals.co2 > 0) {
-            rawData.totalCo2Saved = { value: calculatedTotals.co2, confidence: 1.0 };
-        }
+      }).eq("id", documentId);
+      
+      revalidatePath("/");
+      return;
     }
-
-    const validatedData = WasteRecordSchema.parse({
-        ...rawData,
-        lineItems: rawData.lineItems || []
-    });
-
-    await supabase.from("documents").update({
-      status: "needs_review",
-      extracted_data: validatedData
-    }).eq("id", documentId);
 
   } catch (error: any) {
     console.error("❌ Process Fail:", error);
@@ -327,117 +461,196 @@ export async function reVerifyDocument(documentId: string, customInstructions?: 
     let calculatedTotals = { weight: 0, cost: 0, co2: 0, hazardousCount: 0 };
     let isBigFile = false;
 
-    if (doc.filename.endsWith(".xlsx")) {
+    if (doc.filename.endsWith(".xlsx") || doc.filename.endsWith(".xls")) {
+      // EXCEL: Use adaptive extraction for ALL rows from ALL sheets (re-verify)
       const workbook = XLSX.read(arrayBuffer);
-      const sheetName = workbook.SheetNames[0];
-      const sheet = workbook.Sheets[sheetName];
-
-      console.log("🧮 Räknar totaler via kod (re-verify)...");
-      calculatedTotals = calculateBigDataTotals(sheet);
-      console.log("✅ Kod-Totaler:", calculatedTotals);
-
-      const jsonPreview = XLSX.utils.sheet_to_json(sheet, { header: 1 }).slice(0, 25);
-      const csvPreview = jsonPreview.map(row => (row as any[]).join(",")).join("\n");
       
-      isBigFile = true;
+      // ✅ FIX: Process ALL sheets, not just the first one!
+      console.log(`📊 Re-verify: Excel has ${workbook.SheetNames.length} sheet(s): ${workbook.SheetNames.join(', ')}`);
+      
+      let allData: any[][] = [];
+      
+      for (const sheetName of workbook.SheetNames) {
+        const sheet = workbook.Sheets[sheetName];
+        const sheetData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" }) as any[][];
+        
+        if (sheetData.length === 0) continue;
+        
+        console.log(`   📄 Sheet "${sheetName}": ${sheetData.length} rows`);
+        
+        if (allData.length === 0) {
+          allData = sheetData;
+        } else {
+          const firstRowLooksLikeHeader = sheetData[0]?.some((cell: any) => 
+            String(cell).toLowerCase().match(/datum|material|vikt|adress|kvantitet/)
+          );
+          allData = [...allData, ...(firstRowLooksLikeHeader && sheetData.length > 1 ? sheetData.slice(1) : sheetData)];
+        }
+      }
+      
+      const jsonData = allData;
+      console.log(`📊 Using adaptive extraction for ${jsonData.length} rows from all sheets (re-verify)...`);
+      
+      // Get settings (or use defaults)
+      const { data: settingsData } = await supabase
+        .from("settings")
+        .select("*")
+        .single();
+      
+      // Merge custom instructions into settings if provided
+      const settings = {
+        ...(settingsData || {}),
+        custom_instructions: customInstructions || settingsData?.custom_instructions
+      };
 
-      claudeContent.push({ 
-        type: "text", 
-        text: `Här är ett SMAKPROV (första 20 raderna) av en stor Excel-fil:\n${csvPreview}\n\n` + 
-              `MATEMATISKA TOTALER (Redan uträknat): ` + 
-              `Vikt=${calculatedTotals.weight}, Kostnad=${calculatedTotals.cost}.`
-      });
+      // Use adaptive extraction for ALL rows
+      const adaptiveResult = await extractAdaptive(
+        jsonData as any[][],
+        doc.filename,
+        settings
+      );
+
+      // Convert to expected format
+      const extractedData = {
+        ...adaptiveResult,
+        totalCostSEK: 0,
+        documentType: "waste_report",
+      };
+
+      // Determine status based on extraction quality
+      const qualityScore = (adaptiveResult._validation.completeness + (adaptiveResult.metadata?.confidence || 0) * 100) / 2;
+      const status = qualityScore >= 90 ? "approved" : "needs_review";
+      
+      await supabase.from("documents").update({
+        status,
+        extracted_data: extractedData,
+        updated_at: new Date().toISOString()
+      }).eq("id", documentId);
+
+      revalidatePath(`/review/${documentId}`);
+      revalidatePath("/");
+      return;
 
     } else {
+      // PDF: Keep existing Claude Vision processing with logging
+      const processingLog: string[] = [];
+      const log = (msg: string) => {
+        const ts = new Date().toISOString().split('T')[1].split('.')[0];
+        processingLog.push(`[${ts}] ${msg}`);
+        console.log(msg);
+      };
+      
+      log(`${"=".repeat(60)}`);
+      log(`📄 PDF RE-VERIFICATION: ${doc.filename}`);
+      log(`${"=".repeat(60)}`);
+      if (customInstructions) {
+        log(`📝 Custom instructions provided`);
+      }
+      
       const base64Pdf = Buffer.from(arrayBuffer).toString("base64");
+      log(`✓ PDF converted to base64 (${(arrayBuffer.byteLength / 1024).toFixed(0)} KB)`);
+      
       claudeContent.push({
         type: "document",
         source: { type: "base64", media_type: "application/pdf", data: base64Pdf },
       });
-    }
 
-    const message = await anthropic.messages.create({
-      model: "claude-sonnet-4-5-20250929",
-      max_tokens: 4096,
-      messages: [
-        {
-          role: "user",
-          content: [
-            ...claudeContent as any,
-            {
-              type: "text",
-              text: `Du är en expert-AI för avfallsrapporter. Analysera dokumentet noggrant.
+      log(`📤 Calling Claude Sonnet for PDF OCR...`);
 
-              ANVÄND DESSA SYNONYMER FÖR ATT HITTA RÄTT KOLUMN:
-              - Material: "BEAst-artikel", "Fraktion", "Avfallsslag", "Artikel", "Taxekod", "Restprodukt".
-              - Adress: "Hämtadress", "Littera", "Arbetsplatsnamn", "Uppdragsställe", "Anläggningsadress".
-              - Vikt: "Vikt (kg)", "Mängd", "Kvantitet", "Antal kg", "Vikt körtur".
-              - Farligt Avfall: Leta efter texten "Farligt avfall", "FA" eller material som Asbest, Elektronik, Batterier, Kemikalier.
-              
-              INSTRUKTIONER:
-              1. Hitta Metadata (Leverantör, Datum, Adress).
-              2. Extrahera rader från SMAKPROVET. Returnera MAX 15 RADER i JSON. Försök inte returnera hela filen.
-              3. Farligt avfall: Sätt "isHazardous": true om det är elektronik, kemikalier, asbest etc.
-              4. Adress per rad: Om tabellen har kolumner som "Hämtställe", "Littera" eller "Projekt", extrahera dessa per rad.
-${customInstructions ? `
-              EXTRA INSTRUKTIONER FRÅN ANVÄNDAREN (HÖGSTA PRIORITET):
-              ${customInstructions}
-` : ''}
-              JSON OUTPUT:
+      // PDF processing continues here (only reached for non-Excel files)
+      const message = await anthropic.messages.create({
+        model: "claude-sonnet-4-5-20250929",
+        max_tokens: 4096,
+        messages: [
+          {
+            role: "user",
+            content: [
+              ...claudeContent as any,
               {
-                "date": { "value": "YYYY-MM-DD", "confidence": Number },
-                "supplier": { "value": "String", "confidence": Number },
-                "weightKg": { "value": Number, "confidence": Number },
-                "cost": { "value": Number, "confidence": Number },
-                "totalCo2Saved": { "value": Number, "confidence": Number },
-                "material": { "value": "String (Huvudkategori)", "confidence": Number },
-                "address": { "value": "String", "confidence": Number },
-                "receiver": { "value": "String", "confidence": Number },
-                "lineItems": [
-                  {
-                    "material": { "value": "String", "confidence": Number },
-                    "handling": { "value": "String", "confidence": Number },
-                    "weightKg": { "value": Number, "confidence": Number },
-                    "co2Saved": { "value": Number, "confidence": Number },
-                    "percentage": { "value": "String", "confidence": Number },
-                    "isHazardous": { "value": Boolean, "confidence": Number },
-                    "address": { "value": "String", "confidence": Number },
-                    "receiver": { "value": "String", "confidence": Number }
-                  }
-                ]
-              }
-              Returnera ENDAST ren JSON.`,
-            },
-          ],
-        },
-      ],
-    });
+                type: "text",
+                text: `Du är en expert-AI för avfallsrapporter. Analysera PDF-dokumentet noggrant.
 
-    const textContent = message.content[0].type === 'text' ? message.content[0].text : "";
-    let rawData = extractJsonFromResponse(textContent);
+                ANVÄND DESSA SYNONYMER FÖR ATT HITTA RÄTT KOLUMN:
+                - Material: "BEAst-artikel", "Fraktion", "Avfallsslag", "Artikel", "Taxekod", "Restprodukt".
+                - Adress: "Hämtadress", "Littera", "Arbetsplatsnamn", "Uppdragsställe", "Anläggningsadress".
+                - Vikt: "Vikt (kg)", "Mängd", "Kvantitet", "Antal kg", "Vikt körtur".
+                - Farligt Avfall: Leta efter texten "Farligt avfall", "FA" eller material som Asbest, Elektronik, Batterier, Kemikalier.
+                
+                INSTRUKTIONER:
+                1. Hitta Metadata (Leverantör, Datum, Adress).
+                2. Extrahera alla rader du kan hitta från dokumentet.
+                3. Farligt avfall: Sätt "isHazardous": true om det är elektronik, kemikalier, asbest etc.
+                4. Adress per rad: Om tabellen har kolumner som "Hämtställe", "Littera" eller "Projekt", extrahera dessa per rad.
+                
+                ⚠️ KRITISKT - DATUM/PERIOD-HANTERING:
+                Om dokumentet visar en PERIOD (datumintervall), extrahera ALLTID SLUTDATUMET!
+                Exempel:
+                - "Period 20251201-20251231" → använd "2025-12-31" (slutdatum!)
+                - "Period: 2025-12-01 - 2025-12-31" → använd "2025-12-31" (slutdatum!)
+                Slutdatumet representerar när arbetet SLUTFÖRDES ("Utförtdatum").
+${customInstructions ? `
+                EXTRA INSTRUKTIONER FRÅN ANVÄNDAREN (HÖGSTA PRIORITET):
+                ${customInstructions}
+` : ''}
+                JSON OUTPUT:
+                {
+                  "date": { "value": "YYYY-MM-DD", "confidence": Number },
+                  "supplier": { "value": "String", "confidence": Number },
+                  "weightKg": { "value": Number, "confidence": Number },
+                  "cost": { "value": Number, "confidence": Number },
+                  "totalCo2Saved": { "value": Number, "confidence": Number },
+                  "material": { "value": "String (Huvudkategori)", "confidence": Number },
+                  "address": { "value": "String", "confidence": Number },
+                  "receiver": { "value": "String", "confidence": Number },
+                  "lineItems": [
+                    {
+                      "material": { "value": "String", "confidence": Number },
+                      "handling": { "value": "String", "confidence": Number },
+                      "weightKg": { "value": Number, "confidence": Number },
+                      "co2Saved": { "value": Number, "confidence": Number },
+                      "percentage": { "value": "String", "confidence": Number },
+                      "isHazardous": { "value": Boolean, "confidence": Number },
+                      "address": { "value": "String", "confidence": Number },
+                      "receiver": { "value": "String", "confidence": Number }
+                    }
+                  ]
+                }
+                Returnera ENDAST ren JSON.`,
+              },
+            ],
+          },
+        ],
+      });
 
-    // MERGE: Använd de säkra totalerna från koden som FALLBACK
-    if (isBigFile) {
-        if (!rawData.weightKg?.value || rawData.weightKg.value === 0) {
-            rawData.weightKg = { value: calculatedTotals.weight, confidence: 1.0 };
+      log(`✓ Claude response received`);
+
+      const textContent = message.content[0].type === 'text' ? message.content[0].text : "";
+      let rawData = extractJsonFromResponse(textContent);
+      
+      log(`✓ JSON parsed successfully`);
+
+      const validatedData = WasteRecordSchema.parse({
+          ...rawData,
+          lineItems: rawData.lineItems || [],
+          _processingLog: processingLog  // ✅ Include processing log
+      });
+      
+      const lineItemCount = validatedData.lineItems?.length || 0;
+      log(`✅ PDF re-verification complete: ${lineItemCount} line items extracted`);
+      log(`${"=".repeat(60)}`);
+
+      await supabase.from("documents").update({
+        status: "needs_review",
+        extracted_data: {
+          ...validatedData,
+          _processingLog: processingLog  // ✅ Include processing log in saved data
         }
-        if (!rawData.cost?.value || rawData.cost.value === 0) {
-            rawData.cost = { value: calculatedTotals.cost, confidence: 1.0 };
-        }
-        if (!rawData.totalCo2Saved?.value && calculatedTotals.co2 > 0) {
-            rawData.totalCo2Saved = { value: calculatedTotals.co2, confidence: 1.0 };
-        }
+      }).eq("id", documentId);
+      
+      revalidatePath(`/review/${documentId}`);
+      revalidatePath("/");
+      return;
     }
-
-    const validatedData = WasteRecordSchema.parse({
-        ...rawData,
-        lineItems: rawData.lineItems || []
-    });
-
-    await supabase.from("documents").update({
-      status: "needs_review",
-      extracted_data: validatedData
-    }).eq("id", documentId);
 
     revalidatePath(`/review/${documentId}`);
     revalidatePath("/");
@@ -486,15 +699,17 @@ export async function saveDocument(formData: FormData) {
     const handling = formData.get(`lineItems[${index}].handling`) as string;
     const isHazardous = formData.get(`lineItems[${index}].isHazardous`) === "true";
     const co2Saved = parseFloat(formData.get(`lineItems[${index}].co2Saved`) as string || "0");
+    // ✅ NEW: Get row-specific date
+    const rowDate = formData.get(`lineItems[${index}].date`) as string;
     
     if (material || weightKg > 0) {
       // PRESERVE: Start with original line item data (if exists) to keep extra fields
-      // like wasteCode, costSEK, referensnummer, fordon, date, unit, etc.
+      // like wasteCode, costSEK, referensnummer, fordon, unit, etc.
       const originalItem = existingLineItems[index] || {};
       
       // Merge: original fields + edited fields (edited fields take priority)
       lineItems.push({
-        ...originalItem, // Keep ALL original fields (date, wasteCode, costSEK, unit, etc.)
+        ...originalItem, // Keep ALL original fields (wasteCode, costSEK, unit, etc.)
         // Override with edited values from form:
         material: { value: material || "", confidence: 1 },
         weightKg: { value: weightKg, confidence: 1 },
@@ -504,6 +719,8 @@ export async function saveDocument(formData: FormData) {
         handling: handling ? { value: handling, confidence: 1 } : originalItem.handling,
         isHazardous: { value: isHazardous, confidence: 1 },
         co2Saved: co2Saved > 0 ? { value: co2Saved, confidence: 1 } : originalItem.co2Saved,
+        // ✅ NEW: Save row-specific date (critical for export!)
+        date: rowDate ? { value: rowDate, confidence: 1 } : originalItem.date,
       });
     }
     index++;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { SmartInput } from "@/components/smart-input";
 import { saveDocument } from "@/app/actions";
@@ -208,6 +208,8 @@ export function ReviewForm({
       co2Saved: { value: 0, confidence: 1 },
       address: { value: data.address?.value || "", confidence: 1 },
       receiver: { value: data.receiver?.value || "", confidence: 1 },
+      // Date defaults to document date (can be overridden per row)
+      date: { value: documentDate || "", confidence: 1 },
     };
     setLineItems([...lineItems, newItem]);
   };
@@ -258,6 +260,8 @@ export function ReviewForm({
         const handling = getValue(item.handling);
         const isHazardous = getValue(item.isHazardous);
         const co2Saved = getValue(item.co2Saved);
+        // Get row-specific date (or document date as fallback)
+        const rowDate = getValue(item.date) || documentDate;
         
         formData.append(`lineItems[${index}].material`, material || "");
         formData.append(`lineItems[${index}].weightKg`, String(weightKg || 0));
@@ -274,6 +278,10 @@ export function ReviewForm({
         }
         if (receiver) {
           formData.append(`lineItems[${index}].receiver`, receiver);
+        }
+        // ✅ Include row-specific date (critical for export!)
+        if (rowDate) {
+          formData.append(`lineItems[${index}].date`, rowDate);
         }
       });
       
@@ -510,6 +518,9 @@ export function ReviewForm({
                       Mottagare
                     </th>
                   )}
+                  <th className="text-left text-xs font-semibold text-gray-600 uppercase py-2 px-2">
+                    Datum
+                  </th>
                   <th className="w-12"></th>
                 </tr>
               </thead>
@@ -521,6 +532,10 @@ export function ReviewForm({
                   const addressValue = typeof item.address === 'object' ? item.address?.value : item.address;
                   const locationValue = typeof item.location === 'object' ? item.location?.value : item.location;
                   const receiverValue = typeof item.receiver === 'object' ? item.receiver?.value : item.receiver;
+                  // Get row date - defaults to document date if not set
+                  const rowDateValue = typeof item.date === 'object' ? item.date?.value : item.date;
+                  // Display date: use row date if available, otherwise show document date
+                  const displayDate = rowDateValue || documentDate || "";
                   
                   const missingMaterial = !materialValue || String(materialValue).trim() === "";
                   const missingWeight = !weightValue || Number(weightValue) === 0;
@@ -637,6 +652,17 @@ export function ReviewForm({
                         />
                       </td>
                     )}
+                    {/* DATE PER ROW - defaults to document date but can be overridden */}
+                    <td className="py-2 px-2">
+                      <input
+                        type="date"
+                        name={`lineItems[${index}].date`}
+                        value={displayDate || ''}
+                        onChange={(e) => updateLineItem(index, "date", e.target.value)}
+                        className="w-full text-sm px-2 py-1 border border-gray-300 rounded"
+                        title={rowDateValue ? "Rad-specifikt datum" : "Använder dokumentets datum"}
+                      />
+                    </td>
                     <td className="py-2 px-2">
                       <button
                         type="button"

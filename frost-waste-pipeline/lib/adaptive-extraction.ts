@@ -147,6 +147,18 @@ Priority order for ambiguous matches:
 - MATERIAL: Material > Fraktion > Avfallstyp (or equivalents)
 - WEIGHT: Vikt > Kvantitet > Mängd (or equivalents)
 
+═══════════════════════════════════════════════════════════════════════════════
+HEADER PERIOD DETECTION
+═══════════════════════════════════════════════════════════════════════════════
+Look for period indicators in document title/header rows (first few rows before data):
+- Quarter notation: "Q1", "Q2", "Q3", "Q4", "Kvartal 1", "Kvartal 2", etc.
+- Date ranges: "2025-01-01 - 2025-03-31", "Period: 2025-01-01 till 2025-03-31"
+- Month ranges: "januari - mars 2025", "jan-mar 2025", "Rapport Q3 2025"
+- Single periods: "Q3 2025", "Kvartal 3 2025"
+
+If found, extract the period string as-is (e.g., "Q3 2025" or "2025-01-01 - 2025-03-31").
+This will be used as a fallback date when row-level dates are missing.
+
 COMPACT SWEDISH REFERENCE:
 ${columnLookup}
 
@@ -162,6 +174,7 @@ JSON OUTPUT (no markdown, no backticks):
   "receiverColumn": "matched column name or null",
   "hazardousColumn": "matched column name or null",
   "costColumn": null,
+  "headerPeriod": "Q3 2025" or "2025-01-01 - 2025-03-31" or null,
   "confidence": 0.95,
   "translations": [
     {"originalColumn": "Vægt", "detectedLanguage": "Danish", "mappedTo": "Amount", "swedishEquivalent": "Vikt"}
@@ -190,6 +203,9 @@ JSON OUTPUT (no markdown, no backticks):
     console.log(`  Location: ${analysis.locationColumn || 'NOT FOUND'}`);
     console.log(`  Material: ${analysis.materialColumn || 'NOT FOUND'}`);
     console.log(`  Weight: ${analysis.weightColumn || 'NOT FOUND'}`);
+    if (analysis.headerPeriod) {
+      console.log(`  Header Period: ${analysis.headerPeriod}`);
+    }
     
     // Log any translations detected
     if (analysis.translations && analysis.translations.length > 0) {
@@ -212,6 +228,7 @@ JSON OUTPUT (no markdown, no backticks):
       unitColumn: null,
       receiverColumn: null,
       costColumn: null,
+      headerPeriod: null,
       confidence: 0.3
     };
   }
@@ -220,6 +237,14 @@ JSON OUTPUT (no markdown, no backticks):
 // ============================================================================
 // STEP 2: EXTRACT CHUNK WITH SONNET FALLBACK
 // ============================================================================
+interface ChunkExtractionResult {
+  items: any[];
+  success: boolean;
+  error?: string;
+  model?: string;
+  responseLength?: number;
+}
+
 async function extractChunkWithFallback(
   header: any[],
   chunkRows: any[][],
@@ -228,7 +253,7 @@ async function extractChunkWithFallback(
   chunkNum: number,
   totalChunks: number,
   settings: any
-): Promise<any[]> {
+): Promise<ChunkExtractionResult> {
   
   const tsv = [header, ...chunkRows]
     .map(row => row.map(cell => String(cell || "")).join('\t'))
@@ -292,6 +317,15 @@ DATE HANDLING
 ═══════════════════════════════════════════════════════════════════════════════
 ⚠️ EXCEL SERIAL DATES: If date is a NUMBER (like 45294), convert it!
    Formula: days since 1899-12-30. Example: 45294 = 2024-01-02
+
+⚠️ CRITICAL - PERIOD/DATE RANGE HANDLING:
+   If the document shows a PERIOD (date range), ALWAYS extract the END DATE!
+   Examples:
+   - "Period 20251201-20251231" → extract "2025-12-31" (END date!)
+   - "Period: 2025-12-01 - 2025-12-31" → extract "2025-12-31" (END date!)
+   - "Perioden 1/12/2025 - 31/12/2025" → extract "2025-12-31" (END date!)
+   
+   The END date represents when the work was COMPLETED ("Utförtdatum").
    
 Recognize date formats in all languages and output as YYYY-MM-DD:
 - "2 jan 2024" / "2. januar 2024" / "2.1.2024" / "Jan 2, 2024" → "2024-01-02"
@@ -315,7 +349,14 @@ TABLE DATA (chunk ${chunkNum}/${totalChunks}, ${chunkRows.length} rows)
 ═══════════════════════════════════════════════════════════════════════════════
 ${tsv}
 
+${settings.custom_instructions ? `═══════════════════════════════════════════════════════════════════════════════
+EXTRA INSTRUCTIONS FROM USER (HIGHEST PRIORITY)
 ═══════════════════════════════════════════════════════════════════════════════
+${settings.custom_instructions}
+
+⚠️ These instructions override any conflicting rules above. Follow them exactly.
+═══════════════════════════════════════════════════════════════════════════════
+` : ''}═══════════════════════════════════════════════════════════════════════════════
 JSON OUTPUT FORMAT (no markdown, no backticks)
 ═══════════════════════════════════════════════════════════════════════════════
 {"items":[{"date":"2024-01-16","location":"Address","material":"Material","weightKg":185,"unit":"Kg","receiver":"${receiver}","isHazardous":false}]}
@@ -326,13 +367,16 @@ CRITICAL:
 3. Convert all weights to kg
 4. Set isHazardous:true if hazardous waste indicator present (Farligt avfall / Farlig avfall / Vaarallinen jäte / Hazardous)`;
 
+  // Get max_tokens from settings or use default
+  const maxTokens = settings.extraction_max_tokens || 16384;
+  
   // TRY 1: Haiku (fast & cheap)
   console.log(`   🔄 Attempt 1: Using Haiku`);
   
   try {
     const haikuResponse = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 8192,
+      max_tokens: maxTokens,
       temperature: 0,
       messages: [{ role: "user", content: prompt }]
     });
@@ -341,6 +385,8 @@ CRITICAL:
       .filter((b: any) => b.type === 'text')
       .map((b: any) => (b as any).text)
       .join('');
+    
+    const responseLength = text.length;
     
     // Aggressive JSON cleaning
     let cleaned = text
@@ -352,15 +398,18 @@ CRITICAL:
     
     // Try multiple JSON parsing strategies
     let parsed: any = null;
+    let parseError: string | undefined;
     try {
       parsed = JSON.parse(cleaned);
     } catch (e1: any) {
+      parseError = `JSON parse failed: ${e1?.message || 'Unknown'}`;
       // Strategy 2: Find first { and last }
       try {
         const firstBrace = cleaned.indexOf('{');
         const lastBrace = cleaned.lastIndexOf('}');
         if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
           parsed = JSON.parse(cleaned.substring(firstBrace, lastBrace + 1));
+          parseError = undefined;
         } else {
           throw new Error("No JSON found");
         }
@@ -373,8 +422,9 @@ CRITICAL:
             cleaned = cleaned.trim() + '"';
           }
           parsed = JSON.parse(cleaned);
+          parseError = undefined;
         } catch (e3: any) {
-          throw new Error(`JSON parse failed: ${e1?.message || 'Unknown'}`);
+          parseError = `JSON parse failed after all strategies: ${e1?.message || 'Unknown'}`;
         }
       }
     }
@@ -383,13 +433,19 @@ CRITICAL:
     
     if (Array.isArray(items) && items.length > 0) {
       console.log(`   ✓ Extracted ${items.length} rows (Haiku)`);
-      return items;
+      return {
+        items,
+        success: true,
+        model: "haiku",
+        responseLength
+      };
     }
     
-    throw new Error("No items in Haiku response");
+    throw new Error(`No items in Haiku response${parseError ? ` - ${parseError}` : ''}`);
     
   } catch (haikuError: any) {
-    console.log(`   ❌ Haiku failed: ${haikuError.message.substring(0, 50)}...`);
+    const errorMsg = haikuError.message || String(haikuError);
+    console.log(`   ❌ Haiku failed: ${errorMsg.substring(0, 100)}...`);
   }
   
   // TRY 2: Sonnet (more reliable but expensive)
@@ -398,7 +454,7 @@ CRITICAL:
   try {
     const sonnetResponse = await anthropic.messages.create({
       model: "claude-sonnet-4-5-20250929",
-      max_tokens: 8192,
+      max_tokens: maxTokens,
       temperature: 0,
       messages: [{ role: "user", content: prompt }]
     });
@@ -407,6 +463,8 @@ CRITICAL:
       .filter((b: any) => b.type === 'text')
       .map((b: any) => (b as any).text)
       .join('');
+    
+    const responseLength = text.length;
     
     let cleaned = text
       .replace(/```json/gi, '')
@@ -417,14 +475,17 @@ CRITICAL:
     
     // Try multiple JSON parsing strategies
     let parsed: any = null;
+    let parseError: string | undefined;
     try {
       parsed = JSON.parse(cleaned);
     } catch (e1: any) {
+      parseError = `JSON parse failed: ${e1?.message || 'Unknown'}`;
       try {
         const firstBrace = cleaned.indexOf('{');
         const lastBrace = cleaned.lastIndexOf('}');
         if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
           parsed = JSON.parse(cleaned.substring(firstBrace, lastBrace + 1));
+          parseError = undefined;
         } else {
           throw new Error("No JSON found");
         }
@@ -436,8 +497,9 @@ CRITICAL:
             cleaned = cleaned.trim() + '"';
           }
           parsed = JSON.parse(cleaned);
+          parseError = undefined;
         } catch (e3: any) {
-          throw new Error(`JSON parse failed: ${e1?.message || 'Unknown'}`);
+          parseError = `JSON parse failed after all strategies: ${e1?.message || 'Unknown'}`;
         }
       }
     }
@@ -446,14 +508,25 @@ CRITICAL:
     
     if (Array.isArray(items) && items.length > 0) {
       console.log(`   ✓ Extracted ${items.length} rows (Sonnet)`);
-      return items;
+      return {
+        items,
+        success: true,
+        model: "sonnet",
+        responseLength
+      };
     }
     
-    throw new Error("No items in Sonnet response");
+    throw new Error(`No items in Sonnet response${parseError ? ` - ${parseError}` : ''}`);
     
   } catch (sonnetError: any) {
-    console.error(`   ❌ Sonnet also failed: ${sonnetError.message.substring(0, 50)}...`);
-    return [];
+    const errorMsg = sonnetError.message || String(sonnetError);
+    console.error(`   ❌ Sonnet also failed: ${errorMsg.substring(0, 100)}...`);
+    return {
+      items: [],
+      success: false,
+      error: errorMsg,
+      responseLength: 0
+    };
   }
 }
 
@@ -630,10 +703,15 @@ OUTPUT FORMAT (JSON only, no markdown):
 // ============================================================================
 // STEP 3: MAIN ADAPTIVE EXTRACTION FLOW
 // ============================================================================
+
+// Log callback type for streaming logs to client
+export type LogCallback = (message: string, level?: 'info' | 'success' | 'warning' | 'error') => void;
+
 export async function extractAdaptive(
   excelData: any[][],
   filename: string,
-  settings: any
+  settings: any,
+  onLog?: LogCallback
 ): Promise<{
   lineItems: any[];
   metadata: any;
@@ -642,6 +720,7 @@ export async function extractAdaptive(
   uniqueReceivers: number;
   uniqueMaterials: number;
   _validation: any;
+  _processingLog?: string[];
   _verification?: {
     enabled: boolean;
     confidence: number;
@@ -652,9 +731,21 @@ export async function extractAdaptive(
   };
 }> {
   
-  console.log(`\n${"=".repeat(80)}`);
-  console.log(`📊 ADAPTIVE EXTRACTION: ${filename}`);
-  console.log(`${"=".repeat(80)}`);
+  // Log collection for storing in metadata
+  const processingLog: string[] = [];
+  
+  // Helper to log both to console and callback
+  const log = (message: string, level: 'info' | 'success' | 'warning' | 'error' = 'info') => {
+    const timestamp = new Date().toISOString().split('T')[1].split('.')[0];
+    const logEntry = `[${timestamp}] ${message}`;
+    processingLog.push(logEntry);
+    console.log(message);
+    if (onLog) onLog(message, level);
+  };
+  
+  log(`${"=".repeat(60)}`, 'info');
+  log(`📊 ADAPTIVE EXTRACTION: ${filename}`, 'info');
+  log(`${"=".repeat(60)}`, 'info');
   
   // Find header
   let headerIndex = 0;
@@ -664,7 +755,7 @@ export async function extractAdaptive(
       String(cell).toLowerCase().match(/datum|material|vikt|kvantitet|adress/)
     )) {
       headerIndex = i;
-      console.log(`✓ Header found at row ${i + 1}`);
+      log(`✓ Header found at row ${i + 1}`, 'success');
       break;
     }
   }
@@ -675,7 +766,7 @@ export async function extractAdaptive(
   );
   
   const totalRows = dataRows.length;
-  console.log(`✓ Total rows: ${totalRows}`);
+  log(`✓ Total rows: ${totalRows}`, 'success');
   
   if (totalRows === 0) {
     throw new Error("No data rows found");
@@ -688,11 +779,16 @@ export async function extractAdaptive(
   );
   
   // STEP 2: Extract with Sonnet fallback
-  const CHUNK_SIZE = 50;  // Smaller chunks for more reliable extraction
+  // Get configurable settings with defaults
+  const CHUNK_SIZE = settings.extraction_chunk_size || 50;
+  const retryAttempts = settings.extraction_retry_attempts || 2;
+  const minExtractionRate = settings.min_extraction_rate || 0.9;
+  const failOnIncomplete = settings.fail_on_incomplete_extraction || false;
+  
   const totalChunks = Math.ceil(totalRows / CHUNK_SIZE);
   const allItems: any[] = [];
   
-  console.log(`\n📦 EXTRACTING: ${totalChunks} chunks of ${CHUNK_SIZE} rows\n`);
+  log(`📦 EXTRACTING: ${totalChunks} chunks of ${CHUNK_SIZE} rows`, 'info');
   
   // Check if verification is enabled (default: false to save costs)
   const enableVerification = settings.enable_verification ?? false;
@@ -706,27 +802,81 @@ export async function extractAdaptive(
   let verificationConfidenceSum = 0;
   let verificationChunks = 0;
   
+  // Failure tracking
+  const failedChunks: Array<{ chunkIndex: number; error: string; attempts: number }> = [];
+  let totalRetryAttempts = 0;
+  
+  // Helper function to retry chunk extraction with exponential backoff
+  async function extractChunkWithRetry(
+    chunkIndex: number,
+    chunkRows: any[][],
+    chunkTsv: string
+  ): Promise<{ items: any[]; success: boolean; attempts: number }> {
+    for (let attempt = 0; attempt <= retryAttempts; attempt++) {
+      if (attempt > 0) {
+        const backoffMs = Math.min(1000 * Math.pow(2, attempt - 1), 10000); // Max 10s
+        console.log(`   🔄 Retry attempt ${attempt}/${retryAttempts} (waiting ${backoffMs}ms)...`);
+        await new Promise(resolve => setTimeout(resolve, backoffMs));
+        totalRetryAttempts++;
+      }
+      
+      const result = await extractChunkWithFallback(
+        header,
+        chunkRows,
+        structure,
+        filename,
+        chunkIndex + 1,
+        totalChunks,
+        settings
+      );
+      
+      if (result.success && result.items.length > 0) {
+        return { items: result.items, success: true, attempts: attempt + 1 };
+      }
+      
+      lastError = result.error || `Extracted 0 items (expected ~${chunkRows.length})`;
+    }
+    
+    return { items: [], success: false, attempts: retryAttempts + 1 };
+  }
+  
   for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
     const start = chunkIndex * CHUNK_SIZE;
     const end = Math.min(start + CHUNK_SIZE, totalRows);
     const chunkRows = dataRows.slice(start, end);
     
-    console.log(`📦 Chunk ${chunkIndex + 1}/${totalChunks}: rows ${start + 1}-${end}`);
+    log(`📦 Chunk ${chunkIndex + 1}/${totalChunks}: rows ${start + 1}-${end}`, 'info');
     
     // Build TSV for this chunk (needed for verification)
     const chunkTsv = [header, ...chunkRows]
       .map(row => row.map(cell => String(cell || "")).join('\t'))
       .join('\n');
     
-    let items = await extractChunkWithFallback(
-      header,
-      chunkRows,
-      structure,
-      filename,
-      chunkIndex + 1,
-      totalChunks,
-      settings
-    );
+    // Extract with retry logic
+    const extractionResult = await extractChunkWithRetry(chunkIndex, chunkRows, chunkTsv);
+    let items = extractionResult.items;
+    
+    // Validate chunk extraction
+    if (!extractionResult.success || items.length === 0) {
+      const expectedRows = chunkRows.length;
+      const errorMsg = extractionResult.success 
+        ? `Extracted 0 items (expected ~${expectedRows} rows)` 
+        : `Extraction failed after ${extractionResult.attempts} attempts`;
+      
+      log(`   ⚠️ WARNING: Chunk ${chunkIndex + 1} returned 0 items! Expected ~${expectedRows} rows`, 'warning');
+      log(`   Error: ${errorMsg}`, 'error');
+      
+      failedChunks.push({
+        chunkIndex: chunkIndex + 1,
+        error: errorMsg,
+        attempts: extractionResult.attempts
+      });
+    } else if (items.length < chunkRows.length * 0.5) {
+      // Warn if we got less than 50% of expected rows
+      log(`   ⚠️ WARNING: Chunk ${chunkIndex + 1} extracted only ${items.length}/${chunkRows.length} rows (${((items.length/chunkRows.length)*100).toFixed(0)}%)`, 'warning');
+    } else {
+      log(`   ✓ Extracted ${items.length} rows`, 'success');
+    }
     
     // VERIFICATION STEP (if enabled)
     if (enableVerification && items.length > 0) {
@@ -758,20 +908,46 @@ export async function extractAdaptive(
     allItems.push(...items);
   }
   
-  console.log(`\n✅ TOTAL EXTRACTED: ${allItems.length}/${totalRows} rows (${((allItems.length/totalRows)*100).toFixed(0)}%)`);
+  // Calculate extraction rate
+  const extractionRate = allItems.length / totalRows;
+  const chunkSuccessRate = failedChunks.length > 0 
+    ? ((totalChunks - failedChunks.length) / totalChunks) * 100 
+    : 100;
+  
+  log(`✅ TOTAL EXTRACTED: ${allItems.length}/${totalRows} rows (${(extractionRate*100).toFixed(0)}%)`, 'success');
+  
+  // Log chunk failure summary
+  if (failedChunks.length > 0) {
+    log(`⚠️ CHUNK FAILURES: ${failedChunks.length}/${totalChunks} chunks failed`, 'warning');
+    failedChunks.forEach(fc => {
+      log(`   - Chunk ${fc.chunkIndex}: ${fc.error} (${fc.attempts} attempts)`, 'warning');
+    });
+  }
+  
+  // Fail-fast option: throw error if extraction is incomplete
+  if (failOnIncomplete && extractionRate < minExtractionRate) {
+    const missingRows = totalRows - allItems.length;
+    const failedChunksInfo = failedChunks.length > 0 
+      ? ` Failed chunks: ${failedChunks.map(fc => fc.chunkIndex).join(', ')}.`
+      : '';
+    throw new Error(
+      `Extraction incomplete: ${allItems.length}/${totalRows} rows extracted (${(extractionRate*100).toFixed(0)}%). ` +
+      `Minimum required: ${(minExtractionRate*100).toFixed(0)}%. Missing ${missingRows} rows.${failedChunksInfo}`
+    );
+  }
   
   // Log verification summary if enabled
   if (enableVerification) {
     const avgVerificationConfidence = verificationChunks > 0 
       ? verificationConfidenceSum / verificationChunks 
       : 0;
-    console.log(`\n🔍 VERIFICATION SUMMARY:`);
-    console.log(`   Chunks verified: ${verificationChunks}/${totalChunks}`);
-    console.log(`   Items verified: ${totalVerifiedItems}`);
-    console.log(`   Items flagged: ${totalFlaggedItems}`);
-    console.log(`   Hallucinations found: ${allHallucinations.length}`);
-    console.log(`   Avg confidence: ${(avgVerificationConfidence * 100).toFixed(0)}%`);
-    console.log(`   Total time: ${totalVerificationTime}ms`);
+    log(`🔍 VERIFICATION SUMMARY:`, 'info');
+    log(`   Chunks verified: ${verificationChunks}/${totalChunks}`, 'info');
+    log(`   Items verified: ${totalVerifiedItems}`, 'info');
+    log(`   Items flagged: ${totalFlaggedItems}`, 'info');
+    log(`   Hallucinations found: ${allHallucinations.length}`, allHallucinations.length > 0 ? 'warning' : 'info');
+    log(`   Avg confidence: ${(avgVerificationConfidence * 100).toFixed(0)}%`, 'info');
+    log(`   Total time: ${totalVerificationTime}ms`, 'info');
   }
   
   // Infer receiver and date from filename for all items
@@ -786,6 +962,76 @@ export async function extractAdaptive(
   const cleanFilename = filename.replace(/\s*\(\d+\)/g, '');
   const dateMatch = cleanFilename.match(/(\d{4}[-_]\d{2}[-_]\d{2})/);
   const documentDate = dateMatch ? dateMatch[1].replace(/[-_]/g, '-') : null;
+  
+  // Helper to parse header periods (Q1-Q4, date ranges) to last date of period
+  function parseHeaderPeriod(periodString: string | null | undefined, yearHint?: number): string | null {
+    if (!periodString) return null;
+    
+    const period = periodString.trim();
+    if (!period) return null;
+    
+    // Extract year from period string or use hint
+    const yearMatch = period.match(/\b(20\d{2})\b/);
+    const year = yearMatch ? parseInt(yearMatch[1]) : (yearHint || new Date().getFullYear());
+    
+    // Quarter notation: Q1, Q2, Q3, Q4, Kvartal 1, etc.
+    const quarterMatch = period.match(/\b(?:Q|Kvartal|kvartal)\s*([1-4])\b/i);
+    if (quarterMatch) {
+      const quarter = parseInt(quarterMatch[1]);
+      // Q1: March 31, Q2: June 30, Q3: September 30, Q4: December 31
+      const quarterEndMonths = [3, 6, 9, 12];
+      const quarterEndDays = [31, 30, 30, 31];
+      const month = quarterEndMonths[quarter - 1];
+      const day = quarterEndDays[quarter - 1];
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+    
+    // Date range: "2025-01-01 - 2025-03-31" or "2025-01-01 till 2025-03-31"
+    const dateRangeMatch = period.match(/(\d{4}-\d{2}-\d{2})\s*(?:-|till|to)\s*(\d{4}-\d{2}-\d{2})/i);
+    if (dateRangeMatch) {
+      // Return the last date (end date)
+      return dateRangeMatch[2];
+    }
+    
+    // Month range: "januari - mars 2025" or "jan-mar 2025"
+    const swedishMonths: { [key: string]: number } = {
+      'januari': 1, 'jan': 1, 'februari': 2, 'feb': 2,
+      'mars': 3, 'mar': 3, 'april': 4, 'apr': 4,
+      'maj': 5, 'may': 5, 'juni': 6, 'jun': 6,
+      'juli': 7, 'jul': 7, 'augusti': 8, 'aug': 8,
+      'september': 9, 'sep': 9, 'oktober': 10, 'okt': 10,
+      'november': 11, 'nov': 11, 'december': 12, 'dec': 12
+    };
+    
+    const monthRangeMatch = period.match(/(\w+)\s*(?:-|till|to)\s*(\w+)(?:\s+(\d{4}))?/i);
+    if (monthRangeMatch) {
+      const startMonth = monthRangeMatch[1].toLowerCase();
+      const endMonth = monthRangeMatch[2].toLowerCase();
+      const rangeYear = monthRangeMatch[3] ? parseInt(monthRangeMatch[3]) : year;
+      
+      if (swedishMonths[startMonth] && swedishMonths[endMonth]) {
+        const endMonthNum = swedishMonths[endMonth];
+        // Get last day of end month
+        const lastDay = new Date(rangeYear, endMonthNum, 0).getDate();
+        return `${rangeYear}-${String(endMonthNum).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+      }
+    }
+    
+    // Single month: "mars 2025" -> last day of March
+    const singleMonthMatch = period.match(/(\w+)(?:\s+(\d{4}))?/i);
+    if (singleMonthMatch) {
+      const monthName = singleMonthMatch[1].toLowerCase();
+      const monthYear = singleMonthMatch[2] ? parseInt(singleMonthMatch[2]) : year;
+      
+      if (swedishMonths[monthName]) {
+        const monthNum = swedishMonths[monthName];
+        const lastDay = new Date(monthYear, monthNum, 0).getDate();
+        return `${monthYear}-${String(monthNum).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+      }
+    }
+    
+    return null;
+  }
   
   // Helper to parse Excel dates (handles serial dates)
   function parseExcelDate(value: any): string | null {
@@ -804,48 +1050,68 @@ export async function extractAdaptive(
   }
   
   // Helper to validate and fix dates
-  function validateAndFixDate(extractedDate: string | null, filenameDate: string | null): string {
+  // Priority: rowDate > headerPeriodDate > filenameDate > today
+  function validateAndFixDate(
+    extractedDate: string | null, 
+    headerPeriodDate: string | null, 
+    filenameDate: string | null
+  ): string {
     const today = new Date().toISOString().split('T')[0];
     
-    if (!extractedDate) {
-      return filenameDate || today;
+    // PRIMARY: Use row-level date if present and valid
+    if (extractedDate) {
+      const parsed = parseExcelDate(extractedDate);
+      if (parsed) {
+        const extractedDateObj = new Date(parsed);
+        const todayObj = new Date(today);
+        
+        // Sanity check: reject dates more than 2 years old or in the future
+        const twoYearsAgo = new Date();
+        twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
+        
+        if (extractedDateObj >= twoYearsAgo && extractedDateObj <= todayObj) {
+          // Log info if dates differ (for debugging), but DO NOT override
+          if (filenameDate) {
+            const diffDays = Math.abs((extractedDateObj.getTime() - new Date(filenameDate).getTime()) / (1000 * 60 * 60 * 24));
+            if (diffDays > 30) {
+              console.log(`ℹ️  Row date ${parsed} differs from filename date ${filenameDate} by ${diffDays} days (using row date)`);
+            }
+          }
+          return parsed;
+        } else {
+          // Date is invalid (too old or future), fall through to fallbacks
+          console.log(`⚠️  Extracted date ${parsed} seems wrong (too old or future), using fallback`);
+        }
+      }
     }
     
-    const parsed = parseExcelDate(extractedDate);
-    if (!parsed) {
-      return filenameDate || today;
+    // SECONDARY: Use header period date if available
+    if (headerPeriodDate) {
+      return headerPeriodDate;
     }
     
-    // If filename has a date, compare and prefer filename if dates differ significantly
+    // TERTIARY: Use filename date if available
     if (filenameDate) {
-      const extractedDateObj = new Date(parsed);
-      const filenameDateObj = new Date(filenameDate);
-      const todayObj = new Date(today);
-      
-      // If extracted date is more than 2 years old or in the future, use filename date
-      const twoYearsAgo = new Date();
-      twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
-      
-      if (extractedDateObj < twoYearsAgo || extractedDateObj > todayObj) {
-        console.log(`⚠️  Extracted date ${parsed} seems wrong, using filename date ${filenameDate}`);
-        return filenameDate;
-      }
-      
-      // If dates differ by more than 30 days, prefer filename date
-      const diffDays = Math.abs((extractedDateObj.getTime() - filenameDateObj.getTime()) / (1000 * 60 * 60 * 24));
-      if (diffDays > 30) {
-        console.log(`⚠️  Extracted date ${parsed} differs from filename date ${filenameDate} by ${diffDays} days, using filename date`);
-        return filenameDate;
-      }
+      return filenameDate;
     }
     
-    return parsed;
+    // LAST RESORT: Use today's date
+    return today;
+  }
+  
+  // Parse header period date if available
+  const headerPeriodDate = structure.headerPeriod 
+    ? parseHeaderPeriod(structure.headerPeriod) 
+    : null;
+  
+  if (headerPeriodDate) {
+    log(`✓ Header period detected: ${structure.headerPeriod} → ${headerPeriodDate}`, 'info');
   }
   
   // Ensure all items have date and receiver
   const processedItems = allItems.map((item: any) => {
     const itemDate = item.date ? parseExcelDate(item.date) : null;
-    const finalDate = validateAndFixDate(itemDate, documentDate) || new Date().toISOString().split('T')[0];
+    const finalDate = validateAndFixDate(itemDate, headerPeriodDate, documentDate);
     
     return {
       ...item,
@@ -879,14 +1145,13 @@ export async function extractAdaptive(
   }
   
   const aggregated = Array.from(grouped.values());
-  const totalWeight = aggregated.reduce((sum: number, item: any) => sum + (item.weightKg || 0), 0);
+  const totalWeight = processedItems.reduce((sum: number, item: any) => sum + (item.weightKg || 0), 0);
   
-  const uniqueAddresses = new Set(aggregated.map((item: any) => item.location)).size;
-  const uniqueReceivers = new Set(aggregated.map((item: any) => item.receiver)).size;
-  const uniqueMaterials = new Set(aggregated.map((item: any) => item.material)).size;
+  const uniqueAddresses = new Set(processedItems.map((item: any) => item.location)).size;
+  const uniqueReceivers = new Set(processedItems.map((item: any) => item.receiver)).size;
+  const uniqueMaterials = new Set(processedItems.map((item: any) => item.material)).size;
   
-  // Calculate REAL confidence
-  const extractionRate = allItems.length / totalRows;
+  // Calculate REAL confidence (extractionRate already calculated above)
   const overallConfidence = Math.min(
     structure.confidence,
     extractionRate
@@ -908,27 +1173,31 @@ export async function extractAdaptive(
     finalConfidence = Math.max(0, finalConfidence - hallucinationPenalty);
   }
   
-  console.log(`\n📊 RESULTS:`);
-  console.log(`   Document language: ${structure.detectedLanguage || 'Swedish (assumed)'}`);
+  log(`📊 RESULTS:`, 'info');
+  log(`   Document language: ${structure.detectedLanguage || 'Swedish (assumed)'}`, 'info');
   if (structure.translations && structure.translations.length > 0) {
-    console.log(`   Translations applied: ${structure.translations.length}`);
+    log(`   Translations applied: ${structure.translations.length}`, 'info');
     structure.translations.slice(0, 3).forEach((t: any) => {
-      console.log(`      "${t.originalColumn}" → ${t.mappedTo}`);
+      log(`      "${t.originalColumn}" → ${t.mappedTo}`, 'info');
     });
     if (structure.translations.length > 3) {
-      console.log(`      ... and ${structure.translations.length - 3} more`);
+      log(`      ... and ${structure.translations.length - 3} more`, 'info');
     }
   }
-  console.log(`   Extracted: ${allItems.length}/${totalRows} (${(extractionRate*100).toFixed(0)}%)`);
-  console.log(`   Aggregated: ${aggregated.length} rows`);
-  console.log(`   Total weight: ${(totalWeight/1000).toFixed(2)} ton`);
-  console.log(`   Unique addresses: ${uniqueAddresses}`);
-  console.log(`   Unique materials: ${uniqueMaterials}`);
-  console.log(`   Confidence: ${(finalConfidence*100).toFixed(0)}%${enableVerification ? ' (verified)' : ''}`);
-  if (enableVerification && allHallucinations.length > 0) {
-    console.log(`   ⚠️  Potential issues: ${allHallucinations.length} hallucination(s) detected`);
+  log(`   Extracted: ${allItems.length}/${totalRows} (${(extractionRate*100).toFixed(0)}%)`, extractionRate >= 0.9 ? 'success' : 'warning');
+  log(`   Total rows: ${processedItems.length} (${aggregated.length} unique combinations)`, 'info');
+  log(`   Chunk success rate: ${chunkSuccessRate.toFixed(0)}% (${totalChunks - failedChunks.length}/${totalChunks} successful)`, chunkSuccessRate === 100 ? 'success' : 'warning');
+  if (totalRetryAttempts > 0) {
+    log(`   Retry attempts: ${totalRetryAttempts}`, 'warning');
   }
-  console.log(`${"=".repeat(80)}\n`);
+  log(`   Total weight: ${(totalWeight/1000).toFixed(2)} ton`, 'info');
+  log(`   Unique addresses: ${uniqueAddresses}`, 'info');
+  log(`   Unique materials: ${uniqueMaterials}`, 'info');
+  log(`   Confidence: ${(finalConfidence*100).toFixed(0)}%${enableVerification ? ' (verified)' : ''}`, finalConfidence >= 0.9 ? 'success' : 'warning');
+  if (enableVerification && allHallucinations.length > 0) {
+    log(`   ⚠️ Potential issues: ${allHallucinations.length} hallucination(s) detected`, 'warning');
+  }
+  log(`${"=".repeat(60)}`, 'info');
   
   // Build verification metadata
   const verificationMetadata = enableVerification ? {
@@ -950,16 +1219,19 @@ export async function extractAdaptive(
   };
   
   return {
-    lineItems: aggregated,
+    lineItems: processedItems,
     metadata: {
       totalRows,
       extractedRows: allItems.length,
-      aggregatedRows: aggregated.length,
+      processedRows: processedItems.length,
       structure: structure.columnMapping,
       confidence: finalConfidence,
       extractionRate,
       chunked: true,
       chunks: totalChunks,
+      chunkSuccessRate,
+      failedChunks: failedChunks.length > 0 ? failedChunks : undefined,
+      retryAttempts: totalRetryAttempts > 0 ? totalRetryAttempts : undefined,
       model: "adaptive-haiku-sonnet",
       // Language detection and translations
       language: {
@@ -975,6 +1247,7 @@ export async function extractAdaptive(
         timeMs: totalVerificationTime,
       }
     },
+    _processingLog: processingLog,
     totalWeightKg: totalWeight,
     uniqueAddresses,
     uniqueReceivers,
@@ -985,6 +1258,9 @@ export async function extractAdaptive(
       issues: [
         ...(allItems.length < totalRows * 0.9 
           ? [`Missing ${totalRows - allItems.length} rows`] 
+          : []),
+        ...(failedChunks.length > 0 
+          ? [`${failedChunks.length} chunk(s) failed: ${failedChunks.map(fc => `chunk ${fc.chunkIndex}`).join(', ')}`] 
           : []),
         ...(allHallucinations.length > 0 
           ? [`${allHallucinations.length} potential hallucination(s) detected`] 

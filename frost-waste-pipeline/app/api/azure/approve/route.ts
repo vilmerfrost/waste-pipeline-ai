@@ -67,11 +67,13 @@ export async function POST(req: NextRequest) {
     }
 
     // 7. Optional: Delete from input container (clean up)
-    if (document.extracted_data?.source_folder && document.filename) {
+    // Use azure_original_filename (full blob path) or fallback to original_blob_path
+    const blobPathToDelete = document.azure_original_filename || document.extracted_data?.original_blob_path;
+    if (document.source_container && blobPathToDelete) {
       try {
         await azureConnector.deleteFromInput(
-          document.extracted_data.source_folder, 
-          document.filename
+          document.source_container, 
+          blobPathToDelete
         );
       } catch (deleteError) {
         console.error("Error deleting from input:", deleteError);

@@ -195,7 +195,7 @@ export default function ReviewDetail({ params }: { params: Promise<{ id: string 
                   {data.issues.length} valideringsproblem
                 </h3>
                 <ul className="text-sm text-amber-700 space-y-1">
-                  {data.issues.slice(0, 3).map((issue, i) => (
+                  {data.issues.map((issue, i) => (
                     <li key={i}>Rad {issue.row}: {issue.message}</li>
                   ))}
                 </ul>

@@ -69,7 +69,7 @@ export function GranskaButton({ documentId, filename, onSuccess }: GranskaButton
         status: doc.status,
         confidence: validation.confidence || extractedData.metadata?.confidence,
         qualityScore: validation.qualityScore || validation.completeness,
-        extractedRows: extractedData.metadata?.aggregatedRows || extractedData.lineItems?.length || 0,
+        extractedRows: extractedData.metadata?.processedRows || extractedData.metadata?.aggregatedRows || extractedData.lineItems?.length || 0,
         totalWeight: extractedData.totalWeightKg || 0,
         error: doc.status === "error" ? "Bearbetning misslyckades" : undefined
       };

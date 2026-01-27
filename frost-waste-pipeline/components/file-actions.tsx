@@ -6,6 +6,20 @@ import { deleteDocument, toggleArchive, retryProcessing } from "@/app/actions";
 import { useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
 
+// ✅ Helper: Check if a value is a placeholder that should be replaced
+function isPlaceholderValue(val: string | null | undefined): boolean {
+  if (!val || typeof val !== 'string') return true;
+  const trimmed = val.trim().toLowerCase();
+  return (
+    trimmed === '' ||
+    trimmed === 'okänd mottagare' ||
+    trimmed === 'okänd adress' ||
+    trimmed === 'okänt material' ||
+    trimmed === 'saknas' ||
+    trimmed === 'unknown'
+  );
+}
+
 // --- NY SMART CSV-GENERATOR (Samma logik som ExportActions) ---
 function downloadSingleCsv(doc: any) {
   const data = doc.extracted_data || {};
@@ -31,11 +45,12 @@ function downloadSingleCsv(doc: any) {
   
   let rows: string[] = [];
 
-  // ADRESS-LOGIK: Rad > Huvud > Tom (Aldrig "Okänd")
-  const mainAddress = getVal(data.address);
-  const cleanMainAddress = mainAddress && mainAddress !== "Okänd adress" && mainAddress.trim() !== "" 
-    ? mainAddress.trim() 
-    : "";
+  // ✅ Document-level values: User edit > Extracted > Empty
+  const docAddress = getVal(data.documentMetadata?.address) || getVal(data.address);
+  const cleanMainAddress = !isPlaceholderValue(docAddress) ? docAddress.trim() : "";
+  
+  const docReceiver = getVal(data.documentMetadata?.receiver) || getVal(data.receiver);
+  const cleanReceiver = !isPlaceholderValue(docReceiver) ? docReceiver.trim() : "";
 
   // Hjälpfunktion för att formatera vikt: två decimaler, kommatecken, inga tusenavgränsare
   const formatWeight = (weight: number): string => {
@@ -52,16 +67,13 @@ function downloadSingleCsv(doc: any) {
         const weightVal = Number(getVal(item.weightKg)) || 0;
         const weightStr = formatWeight(weightVal);
 
-        // Försök hitta rad-adress, annars ta huvudadress
-        let rowAddr = getVal(item.address);
-        if (!rowAddr || rowAddr === "Okänd adress" || rowAddr.trim() === "") {
-          rowAddr = cleanMainAddress; // Fallback till huvudadress
-        } else {
-          rowAddr = rowAddr.trim();
-        }
+        // ✅ ADRESS PER RAD: Use row if NOT placeholder, else document-level
+        const itemAddr = getVal(item.address);
+        const rowAddr = isPlaceholderValue(itemAddr) ? cleanMainAddress : itemAddr.trim();
 
-        // ✅ MOTTAGARE PER RAD
-        const rowReceiver = getVal(item.receiver) || getVal(data.receiver) || "";
+        // ✅ MOTTAGARE PER RAD: Use row if NOT placeholder, else document-level
+        const itemReceiver = getVal(item.receiver);
+        const rowReceiver = isPlaceholderValue(itemReceiver) ? cleanReceiver : itemReceiver.trim();
 
         const row = [
             rowDate, // ✅ ÅÅÅÅ-MM-DD format
@@ -113,11 +125,12 @@ function downloadSingleExcel(doc: any) {
     return field;
   };
 
-  // ADRESS-LOGIK: Rad > Huvud > Tom (Aldrig "Okänd")
-  const mainAddress = getVal(data.address);
-  const cleanMainAddress = mainAddress && mainAddress !== "Okänd adress" && mainAddress.trim() !== "" 
-    ? mainAddress.trim() 
-    : "";
+  // ✅ Document-level values: User edit > Extracted > Empty
+  const docAddress = getVal(data.documentMetadata?.address) || getVal(data.address);
+  const cleanMainAddress = !isPlaceholderValue(docAddress) ? docAddress.trim() : "";
+  
+  const docReceiver = getVal(data.documentMetadata?.receiver) || getVal(data.receiver);
+  const cleanReceiver = !isPlaceholderValue(docReceiver) ? docReceiver.trim() : "";
 
   let rows: any[] = [];
 
@@ -132,16 +145,13 @@ function downloadSingleExcel(doc: any) {
       // ✅ DATUM PER RAD: Använd datum från lineItem om det finns, annars dokumentets datum
       const rowDate = getVal(item.date) || getVal(data.date) || doc.created_at.split("T")[0];
       
-      // Försök hitta rad-adress, annars ta huvudadress
-      let rowAddr = getVal(item.address);
-      if (!rowAddr || rowAddr === "Okänd adress" || rowAddr.trim() === "") {
-        rowAddr = cleanMainAddress;
-      } else {
-        rowAddr = rowAddr.trim();
-      }
+      // ✅ ADRESS PER RAD: Use row if NOT placeholder, else document-level
+      const itemAddr = getVal(item.address);
+      const rowAddr = isPlaceholderValue(itemAddr) ? cleanMainAddress : itemAddr.trim();
 
-      // ✅ MOTTAGARE PER RAD
-      const rowReceiver = getVal(item.receiver) || getVal(data.receiver) || "";
+      // ✅ MOTTAGARE PER RAD: Use row if NOT placeholder, else document-level
+      const itemReceiver = getVal(item.receiver);
+      const rowReceiver = isPlaceholderValue(itemReceiver) ? cleanReceiver : itemReceiver.trim();
 
       rows.push({
         "Datum": rowDate, // ✅ ÅÅÅÅ-MM-DD format

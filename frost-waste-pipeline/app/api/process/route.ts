@@ -486,8 +486,22 @@ async function extractFromPDF(
   settings: any
 ): Promise<any> {
   
+  // ✅ Processing log for tracking (matches extractAdaptive pattern)
+  const processingLog: string[] = [];
+  const log = (message: string, level: 'info' | 'success' | 'warning' | 'error' = 'info') => {
+    const timestamp = new Date().toISOString().split('T')[1].split('.')[0];
+    const logEntry = `[${timestamp}] ${message}`;
+    processingLog.push(logEntry);
+    console.log(message);
+  };
+  
+  log(`${"=".repeat(60)}`, 'info');
+  log(`📄 PDF EXTRACTION: ${filename}`, 'info');
+  log(`${"=".repeat(60)}`, 'info');
+  
   // Convert PDF to base64
   const base64Data = Buffer.from(pdfBuffer).toString("base64");
+  log(`✓ PDF converted to base64 (${(pdfBuffer.byteLength / 1024).toFixed(0)} KB)`, 'success');
   
   // Infer receiver from filename
   let receiver = "Okänd mottagare";
@@ -495,10 +509,14 @@ async function extractFromPDF(
   if (fn.includes('ragn-sells') || fn.includes('ragnsells')) receiver = "Ragn-Sells";
   else if (fn.includes('renova')) receiver = "Renova";
   else if (fn.includes('nsr')) receiver = "NSR";
+  log(`✓ Inferred receiver: ${receiver}`, 'info');
   
   // Extract date from filename
   const dateMatch = filename.match(/(\d{4}-\d{2}-\d{2})/);
   const filenameDate = dateMatch ? dateMatch[1] : null;
+  if (filenameDate) {
+    log(`✓ Date from filename: ${filenameDate}`, 'info');
+  }
   
   // Material synonyms
   const synonyms = Object.entries(settings.material_synonyms || {})
@@ -571,6 +589,7 @@ Return values directly: "material": "Betong" NOT "material": {"value": "Betong"}
 Extract ALL material rows from the table. Return JSON only!`;
 
   try {
+    log(`📤 Calling Claude Sonnet for PDF OCR...`, 'info');
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-5-20250929", // Use Sonnet for better PDF OCR quality
       max_tokens: 16384,
@@ -600,6 +619,8 @@ Extract ALL material rows from the table. Return JSON only!`;
       .map((b: any) => (b as any).text)
       .join('');
     
+    log(`✓ Claude response received (${text.length} chars)`, 'success');
+    
     // Clean and parse
     let cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
     
@@ -627,10 +648,13 @@ Extract ALL material rows from the table. Return JSON only!`;
           }
           parsed = JSON.parse(cleaned);
         } catch (e3: any) {
+          log(`❌ JSON parsing failed: ${e1?.message || 'Unknown'}`, 'error');
           throw new Error(`JSON parse failed: ${e1?.message || 'Unknown'}`);
         }
       }
     }
+    
+    log(`✓ JSON parsed successfully`, 'success');
     
     // Extract document-level info with improved fallbacks
     const documentInfo = parsed.documentInfo || {};
@@ -656,8 +680,13 @@ Extract ALL material rows from the table. Return JSON only!`;
                              documentInfo.sender ||
                              "Okänd leverantör";
     
+    log(`📋 Document metadata extracted:`, 'info');
+    log(`   Date: ${documentDate || 'Not found'}`, 'info');
+    log(`   Address: ${documentAddress || 'Not found'}`, 'info');
+    log(`   Supplier: ${documentSupplier}`, 'info');
     
     const rawItems = parsed.items || [];
+    log(`📦 Found ${rawItems.length} raw items in PDF`, 'info');
     
     // CRITICAL: Clean the data to remove {value, confidence} wrappers
     const cleanedItems = cleanPDFExtractionData(rawItems);
@@ -722,12 +751,23 @@ Extract ALL material rows from the table. Return JSON only!`;
     const uniqueAddresses = new Set(aggregated.map((item: any) => item.location)).size;
     const uniqueMaterials = new Set(aggregated.map((item: any) => item.material)).size;
     
+    log(`✅ Aggregation complete: ${processedItems.length} rows → ${aggregated.length} unique combinations`, 'success');
     
     // Calculate total cost if available
     const totalCostSEK = aggregated.reduce((sum: number, item: any) => {
       const cost = parseFloat(String(item.costSEK || 0));
       return sum + cost;
     }, 0);
+    
+    // Final summary
+    log(`${"=".repeat(60)}`, 'info');
+    log(`📊 PDF EXTRACTION RESULTS:`, 'info');
+    log(`   Extracted: ${processedItems.length} rows`, 'success');
+    log(`   Aggregated: ${aggregated.length} unique combinations`, 'info');
+    log(`   Total weight: ${(totalWeight/1000).toFixed(2)} ton`, 'info');
+    log(`   Unique addresses: ${uniqueAddresses}`, 'info');
+    log(`   Unique materials: ${uniqueMaterials}`, 'info');
+    log(`${"=".repeat(60)}`, 'info');
     
     return {
       lineItems: aggregated, // Clean data, no wrappers!
@@ -756,12 +796,17 @@ Extract ALL material rows from the table. Return JSON only!`;
         completeness: processedItems.length > 0 ? 95 : 0,
         confidence: 90,
         issues: processedItems.length === 0 ? ["No data extracted from PDF"] : []
-      }
+      },
+      _processingLog: processingLog  // ✅ Include processing log for UI display
     };
     
   } catch (error: any) {
+    log(`❌ PDF extraction failed: ${error.message}`, 'error');
     console.error("❌ PDF extraction failed:", error);
-    throw new Error(`PDF extraction failed: ${error.message}`);
+    // Include processingLog in thrown error for debugging
+    const enhancedError = new Error(`PDF extraction failed: ${error.message}`);
+    (enhancedError as any)._processingLog = processingLog;
+    throw enhancedError;
   }
 }
 
@@ -861,8 +906,45 @@ export async function GET(req: Request) {
       
       // EXCEL PROCESSING WITH ADAPTIVE EXTRACTION
       const workbook = XLSX.read(arrayBuffer);
-      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-      const jsonData = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: "" });
+      
+      // ✅ FIX: Process ALL sheets, not just the first one!
+      console.log(`📊 Excel has ${workbook.SheetNames.length} sheet(s): ${workbook.SheetNames.join(', ')}`);
+      
+      let allData: any[][] = [];
+      
+      for (const sheetName of workbook.SheetNames) {
+        const sheet = workbook.Sheets[sheetName];
+        const sheetData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" }) as any[][];
+        
+        // Skip empty sheets
+        if (sheetData.length === 0) {
+          console.log(`   ⏭️ Skipping empty sheet: ${sheetName}`);
+          continue;
+        }
+        
+        console.log(`   📄 Sheet "${sheetName}": ${sheetData.length} rows`);
+        
+        if (allData.length === 0) {
+          // First sheet - include header
+          allData = sheetData;
+        } else {
+          // Subsequent sheets - skip header row if it looks like the same structure
+          const firstRowLooksLikeHeader = sheetData[0]?.some((cell: any) => 
+            String(cell).toLowerCase().match(/datum|material|vikt|adress|kvantitet/)
+          );
+          
+          if (firstRowLooksLikeHeader && sheetData.length > 1) {
+            // Skip header, add data rows
+            allData = [...allData, ...sheetData.slice(1)];
+          } else {
+            // Add all rows
+            allData = [...allData, ...sheetData];
+          }
+        }
+      }
+      
+      console.log(`   ✅ Combined total: ${allData.length} rows from all sheets`);
+      const jsonData = allData;
       
       // Use adaptive extraction for better handling of chaotic documents!
       const adaptiveResult = await extractAdaptive(
@@ -900,9 +982,10 @@ export async function GET(req: Request) {
       ? extractedData.metadata.confidence * 100 
       : confidence;
     
+    const rowCount = extractedData.metadata?.processedRows || extractedData.metadata?.aggregatedRows || extractedData.lineItems?.length || 0;
     const aiSummary = completeness >= 95 && overallConfidence >= 90
-      ? `✓ Dokument med ${extractedData.metadata.aggregatedRows} rader från ${extractedData.uniqueAddresses} adresser. Total vikt: ${(extractedData.totalWeightKg/1000).toFixed(2)} ton. Data komplett (${overallConfidence.toFixed(0)}% säkerhet) - redo för godkännande.`
-      : `⚠️ Dokument med ${extractedData.metadata.aggregatedRows} rader. ${(100 - completeness).toFixed(0)}% data saknas, ${overallConfidence.toFixed(0)}% säkerhet - behöver granskning.`;
+      ? `✓ Dokument med ${rowCount} rader från ${extractedData.uniqueAddresses} adresser. Total vikt: ${(extractedData.totalWeightKg/1000).toFixed(2)} ton. Data komplett (${overallConfidence.toFixed(0)}% säkerhet) - redo för godkännande.`
+      : `⚠️ Dokument med ${rowCount} rader. ${(100 - completeness).toFixed(0)}% data saknas, ${overallConfidence.toFixed(0)}% säkerhet - behöver granskning.`;
     
     extractedData.aiSummary = aiSummary;
     
