@@ -12,13 +12,14 @@ CREATE INDEX IF NOT EXISTS idx_documents_azure_original_filename ON documents(az
 CREATE INDEX IF NOT EXISTS idx_documents_source_container ON documents(source_container);
 
 -- Migrate existing documents
--- Set azure_original_filename to current filename
--- Infer source_container from filename pattern or extracted_data
+-- IMPORTANT: azure_original_filename should be the FULL blob path (including folder!), not just filename
+-- Use original_blob_path from extracted_data if available (most reliable)
 UPDATE documents
 SET 
   azure_original_filename = COALESCE(
     azure_original_filename,
-    filename
+    extracted_data->>'original_blob_path',  -- FULL blob path (preferred!)
+    filename  -- Fallback if no blob path stored
   ),
   source_container = COALESCE(
     source_container,
@@ -33,6 +34,6 @@ SET
 WHERE azure_original_filename IS NULL OR source_container IS NULL;
 
 -- Add comment for documentation
-COMMENT ON COLUMN documents.azure_original_filename IS 'Original filename in Azure Blob Storage (for safe cleanup)';
+COMMENT ON COLUMN documents.azure_original_filename IS 'FULL original blob path in Azure Blob Storage including any folders (e.g., "subfolder/file.xlsx") for safe cleanup';
 COMMENT ON COLUMN documents.source_container IS 'Azure container name where file was originally stored (unable-to-process or unsupported-file-format)';
 

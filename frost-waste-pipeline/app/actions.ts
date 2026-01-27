@@ -259,14 +259,36 @@ async function processDocument(documentId: string) {
     let calculatedTotals = { weight: 0, cost: 0, co2: 0, hazardousCount: 0 };
     let isBigFile = false;
 
-    if (doc.filename.endsWith(".xlsx")) {
-      // EXCEL: Use adaptive extraction for ALL rows
+    if (doc.filename.endsWith(".xlsx") || doc.filename.endsWith(".xls")) {
+      // EXCEL: Use adaptive extraction for ALL rows from ALL sheets
       const workbook = XLSX.read(arrayBuffer);
-      const sheetName = workbook.SheetNames[0];
-      const sheet = workbook.Sheets[sheetName];
-      const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
-
-      console.log("📊 Using adaptive extraction for full document...");
+      
+      // ✅ FIX: Process ALL sheets, not just the first one!
+      console.log(`📊 Excel has ${workbook.SheetNames.length} sheet(s): ${workbook.SheetNames.join(', ')}`);
+      
+      let allData: any[][] = [];
+      
+      for (const sheetName of workbook.SheetNames) {
+        const sheet = workbook.Sheets[sheetName];
+        const sheetData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" }) as any[][];
+        
+        if (sheetData.length === 0) continue;
+        
+        console.log(`   📄 Sheet "${sheetName}": ${sheetData.length} rows`);
+        
+        if (allData.length === 0) {
+          allData = sheetData;
+        } else {
+          // Skip header row on subsequent sheets if it looks like a header
+          const firstRowLooksLikeHeader = sheetData[0]?.some((cell: any) => 
+            String(cell).toLowerCase().match(/datum|material|vikt|adress|kvantitet/)
+          );
+          allData = [...allData, ...(firstRowLooksLikeHeader && sheetData.length > 1 ? sheetData.slice(1) : sheetData)];
+        }
+      }
+      
+      const jsonData = allData;
+      console.log(`📊 Using adaptive extraction for ${jsonData.length} rows from all sheets...`);
       
       // Get settings (or use defaults)
       const { data: settingsData } = await supabase
@@ -303,80 +325,110 @@ async function processDocument(documentId: string) {
       return;
 
     } else {
-      // PDF: Keep existing Claude Vision processing
+      // PDF: Keep existing Claude Vision processing with logging
+      const processingLog: string[] = [];
+      const log = (msg: string) => {
+        const ts = new Date().toISOString().split('T')[1].split('.')[0];
+        processingLog.push(`[${ts}] ${msg}`);
+        console.log(msg);
+      };
+      
+      log(`${"=".repeat(60)}`);
+      log(`📄 PDF EXTRACTION: ${doc.filename}`);
+      log(`${"=".repeat(60)}`);
+      
       const base64Pdf = Buffer.from(arrayBuffer).toString("base64");
+      log(`✓ PDF converted to base64 (${(arrayBuffer.byteLength / 1024).toFixed(0)} KB)`);
+      
       claudeContent.push({
         type: "document",
         source: { type: "base64", media_type: "application/pdf", data: base64Pdf },
       });
-    }
 
-    // PDF processing continues here (only reached for non-Excel files)
-    const message = await anthropic.messages.create({
-      model: "claude-sonnet-4-5-20250929",
-      max_tokens: 4096,
-      messages: [
-        {
-          role: "user",
-          content: [
-            ...claudeContent as any,
-            {
-              type: "text",
-              text: `Analysera PDF-dokumentet.
-              
-              INSTRUKTIONER:
-              1. Hitta Metadata (Leverantör, Datum, Adress).
-              2. Extrahera alla rader du kan hitta från dokumentet.
-              
-              ⚠️ KRITISKT - DATUM/PERIOD-HANTERING:
-              Om dokumentet visar en PERIOD (datumintervall), extrahera ALLTID SLUTDATUMET!
-              Exempel:
-              - "Period 20251201-20251231" → använd "2025-12-31" (slutdatum!)
-              - "Period: 2025-12-01 - 2025-12-31" → använd "2025-12-31" (slutdatum!)
-              Slutdatumet representerar när arbetet SLUTFÖRDES ("Utförtdatum").
-              
-              JSON OUTPUT:
+      log(`📤 Calling Claude Sonnet for PDF OCR...`);
+
+      // PDF processing continues here (only reached for non-Excel files)
+      const message = await anthropic.messages.create({
+        model: "claude-sonnet-4-5-20250929",
+        max_tokens: 4096,
+        messages: [
+          {
+            role: "user",
+            content: [
+              ...claudeContent as any,
               {
-                "date": { "value": "YYYY-MM-DD", "confidence": Number },
-                "supplier": { "value": "String", "confidence": Number },
-                "weightKg": { "value": Number, "confidence": Number },
-                "cost": { "value": Number, "confidence": Number },
-                "totalCo2Saved": { "value": Number, "confidence": Number },
-                "material": { "value": "String (Huvudkategori)", "confidence": Number },
-                "address": { "value": "String", "confidence": Number },
-                "receiver": { "value": "String", "confidence": Number },
-                "lineItems": [
-                  {
-                    "material": { "value": "String", "confidence": Number },
-                    "handling": { "value": "String", "confidence": Number },
-                    "weightKg": { "value": Number, "confidence": Number },
-                    "co2Saved": { "value": Number, "confidence": Number },
-                    "percentage": { "value": "String", "confidence": Number },
-                    "isHazardous": { "value": Boolean, "confidence": Number },
-                    "address": { "value": "String", "confidence": Number },
-                    "receiver": { "value": "String", "confidence": Number }
-                  }
-                ]
-              }
-              Returnera ENDAST ren JSON.`,
-            },
-          ],
-        },
-      ],
-    });
+                type: "text",
+                text: `Analysera PDF-dokumentet.
+                
+                INSTRUKTIONER:
+                1. Hitta Metadata (Leverantör, Datum, Adress).
+                2. Extrahera alla rader du kan hitta från dokumentet.
+                
+                ⚠️ KRITISKT - DATUM/PERIOD-HANTERING:
+                Om dokumentet visar en PERIOD (datumintervall), extrahera ALLTID SLUTDATUMET!
+                Exempel:
+                - "Period 20251201-20251231" → använd "2025-12-31" (slutdatum!)
+                - "Period: 2025-12-01 - 2025-12-31" → använd "2025-12-31" (slutdatum!)
+                Slutdatumet representerar när arbetet SLUTFÖRDES ("Utförtdatum").
+                
+                JSON OUTPUT:
+                {
+                  "date": { "value": "YYYY-MM-DD", "confidence": Number },
+                  "supplier": { "value": "String", "confidence": Number },
+                  "weightKg": { "value": Number, "confidence": Number },
+                  "cost": { "value": Number, "confidence": Number },
+                  "totalCo2Saved": { "value": Number, "confidence": Number },
+                  "material": { "value": "String (Huvudkategori)", "confidence": Number },
+                  "address": { "value": "String", "confidence": Number },
+                  "receiver": { "value": "String", "confidence": Number },
+                  "lineItems": [
+                    {
+                      "material": { "value": "String", "confidence": Number },
+                      "handling": { "value": "String", "confidence": Number },
+                      "weightKg": { "value": Number, "confidence": Number },
+                      "co2Saved": { "value": Number, "confidence": Number },
+                      "percentage": { "value": "String", "confidence": Number },
+                      "isHazardous": { "value": Boolean, "confidence": Number },
+                      "address": { "value": "String", "confidence": Number },
+                      "receiver": { "value": "String", "confidence": Number }
+                    }
+                  ]
+                }
+                Returnera ENDAST ren JSON.`,
+              },
+            ],
+          },
+        ],
+      });
 
-    const textContent = message.content[0].type === 'text' ? message.content[0].text : "";
-    let rawData = extractJsonFromResponse(textContent);
+      log(`✓ Claude response received`);
 
-    const validatedData = WasteRecordSchema.parse({
-        ...rawData,
-        lineItems: rawData.lineItems || []
-    });
+      const textContent = message.content[0].type === 'text' ? message.content[0].text : "";
+      let rawData = extractJsonFromResponse(textContent);
+      
+      log(`✓ JSON parsed successfully`);
 
-    await supabase.from("documents").update({
-      status: "needs_review",
-      extracted_data: validatedData
-    }).eq("id", documentId);
+      const validatedData = WasteRecordSchema.parse({
+          ...rawData,
+          lineItems: rawData.lineItems || [],
+          _processingLog: processingLog  // ✅ Include processing log
+      });
+      
+      const lineItemCount = validatedData.lineItems?.length || 0;
+      log(`✅ PDF extraction complete: ${lineItemCount} line items extracted`);
+      log(`${"=".repeat(60)}`);
+
+      await supabase.from("documents").update({
+        status: "needs_review",
+        extracted_data: {
+          ...validatedData,
+          _processingLog: processingLog  // ✅ Include processing log in saved data
+        }
+      }).eq("id", documentId);
+      
+      revalidatePath("/");
+      return;
+    }
 
   } catch (error: any) {
     console.error("❌ Process Fail:", error);
@@ -409,14 +461,35 @@ export async function reVerifyDocument(documentId: string, customInstructions?: 
     let calculatedTotals = { weight: 0, cost: 0, co2: 0, hazardousCount: 0 };
     let isBigFile = false;
 
-    if (doc.filename.endsWith(".xlsx")) {
-      // EXCEL: Use adaptive extraction for ALL rows (re-verify)
+    if (doc.filename.endsWith(".xlsx") || doc.filename.endsWith(".xls")) {
+      // EXCEL: Use adaptive extraction for ALL rows from ALL sheets (re-verify)
       const workbook = XLSX.read(arrayBuffer);
-      const sheetName = workbook.SheetNames[0];
-      const sheet = workbook.Sheets[sheetName];
-      const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
-
-      console.log("📊 Using adaptive extraction for full document (re-verify)...");
+      
+      // ✅ FIX: Process ALL sheets, not just the first one!
+      console.log(`📊 Re-verify: Excel has ${workbook.SheetNames.length} sheet(s): ${workbook.SheetNames.join(', ')}`);
+      
+      let allData: any[][] = [];
+      
+      for (const sheetName of workbook.SheetNames) {
+        const sheet = workbook.Sheets[sheetName];
+        const sheetData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" }) as any[][];
+        
+        if (sheetData.length === 0) continue;
+        
+        console.log(`   📄 Sheet "${sheetName}": ${sheetData.length} rows`);
+        
+        if (allData.length === 0) {
+          allData = sheetData;
+        } else {
+          const firstRowLooksLikeHeader = sheetData[0]?.some((cell: any) => 
+            String(cell).toLowerCase().match(/datum|material|vikt|adress|kvantitet/)
+          );
+          allData = [...allData, ...(firstRowLooksLikeHeader && sheetData.length > 1 ? sheetData.slice(1) : sheetData)];
+        }
+      }
+      
+      const jsonData = allData;
+      console.log(`📊 Using adaptive extraction for ${jsonData.length} rows from all sheets (re-verify)...`);
       
       // Get settings (or use defaults)
       const { data: settingsData } = await supabase
@@ -459,91 +532,125 @@ export async function reVerifyDocument(documentId: string, customInstructions?: 
       return;
 
     } else {
-      // PDF: Keep existing Claude Vision processing
+      // PDF: Keep existing Claude Vision processing with logging
+      const processingLog: string[] = [];
+      const log = (msg: string) => {
+        const ts = new Date().toISOString().split('T')[1].split('.')[0];
+        processingLog.push(`[${ts}] ${msg}`);
+        console.log(msg);
+      };
+      
+      log(`${"=".repeat(60)}`);
+      log(`📄 PDF RE-VERIFICATION: ${doc.filename}`);
+      log(`${"=".repeat(60)}`);
+      if (customInstructions) {
+        log(`📝 Custom instructions provided`);
+      }
+      
       const base64Pdf = Buffer.from(arrayBuffer).toString("base64");
+      log(`✓ PDF converted to base64 (${(arrayBuffer.byteLength / 1024).toFixed(0)} KB)`);
+      
       claudeContent.push({
         type: "document",
         source: { type: "base64", media_type: "application/pdf", data: base64Pdf },
       });
-    }
 
-    // PDF processing continues here (only reached for non-Excel files)
-    const message = await anthropic.messages.create({
-      model: "claude-sonnet-4-5-20250929",
-      max_tokens: 4096,
-      messages: [
-        {
-          role: "user",
-          content: [
-            ...claudeContent as any,
-            {
-              type: "text",
-              text: `Du är en expert-AI för avfallsrapporter. Analysera PDF-dokumentet noggrant.
+      log(`📤 Calling Claude Sonnet for PDF OCR...`);
 
-              ANVÄND DESSA SYNONYMER FÖR ATT HITTA RÄTT KOLUMN:
-              - Material: "BEAst-artikel", "Fraktion", "Avfallsslag", "Artikel", "Taxekod", "Restprodukt".
-              - Adress: "Hämtadress", "Littera", "Arbetsplatsnamn", "Uppdragsställe", "Anläggningsadress".
-              - Vikt: "Vikt (kg)", "Mängd", "Kvantitet", "Antal kg", "Vikt körtur".
-              - Farligt Avfall: Leta efter texten "Farligt avfall", "FA" eller material som Asbest, Elektronik, Batterier, Kemikalier.
-              
-              INSTRUKTIONER:
-              1. Hitta Metadata (Leverantör, Datum, Adress).
-              2. Extrahera alla rader du kan hitta från dokumentet.
-              3. Farligt avfall: Sätt "isHazardous": true om det är elektronik, kemikalier, asbest etc.
-              4. Adress per rad: Om tabellen har kolumner som "Hämtställe", "Littera" eller "Projekt", extrahera dessa per rad.
-              
-              ⚠️ KRITISKT - DATUM/PERIOD-HANTERING:
-              Om dokumentet visar en PERIOD (datumintervall), extrahera ALLTID SLUTDATUMET!
-              Exempel:
-              - "Period 20251201-20251231" → använd "2025-12-31" (slutdatum!)
-              - "Period: 2025-12-01 - 2025-12-31" → använd "2025-12-31" (slutdatum!)
-              Slutdatumet representerar när arbetet SLUTFÖRDES ("Utförtdatum").
-${customInstructions ? `
-              EXTRA INSTRUKTIONER FRÅN ANVÄNDAREN (HÖGSTA PRIORITET):
-              ${customInstructions}
-` : ''}
-              JSON OUTPUT:
+      // PDF processing continues here (only reached for non-Excel files)
+      const message = await anthropic.messages.create({
+        model: "claude-sonnet-4-5-20250929",
+        max_tokens: 4096,
+        messages: [
+          {
+            role: "user",
+            content: [
+              ...claudeContent as any,
               {
-                "date": { "value": "YYYY-MM-DD", "confidence": Number },
-                "supplier": { "value": "String", "confidence": Number },
-                "weightKg": { "value": Number, "confidence": Number },
-                "cost": { "value": Number, "confidence": Number },
-                "totalCo2Saved": { "value": Number, "confidence": Number },
-                "material": { "value": "String (Huvudkategori)", "confidence": Number },
-                "address": { "value": "String", "confidence": Number },
-                "receiver": { "value": "String", "confidence": Number },
-                "lineItems": [
-                  {
-                    "material": { "value": "String", "confidence": Number },
-                    "handling": { "value": "String", "confidence": Number },
-                    "weightKg": { "value": Number, "confidence": Number },
-                    "co2Saved": { "value": Number, "confidence": Number },
-                    "percentage": { "value": "String", "confidence": Number },
-                    "isHazardous": { "value": Boolean, "confidence": Number },
-                    "address": { "value": "String", "confidence": Number },
-                    "receiver": { "value": "String", "confidence": Number }
-                  }
-                ]
-              }
-              Returnera ENDAST ren JSON.`,
-            },
-          ],
-        },
-      ],
-    });
+                type: "text",
+                text: `Du är en expert-AI för avfallsrapporter. Analysera PDF-dokumentet noggrant.
 
-    const textContent = message.content[0].type === 'text' ? message.content[0].text : "";
-    let rawData = extractJsonFromResponse(textContent);
+                ANVÄND DESSA SYNONYMER FÖR ATT HITTA RÄTT KOLUMN:
+                - Material: "BEAst-artikel", "Fraktion", "Avfallsslag", "Artikel", "Taxekod", "Restprodukt".
+                - Adress: "Hämtadress", "Littera", "Arbetsplatsnamn", "Uppdragsställe", "Anläggningsadress".
+                - Vikt: "Vikt (kg)", "Mängd", "Kvantitet", "Antal kg", "Vikt körtur".
+                - Farligt Avfall: Leta efter texten "Farligt avfall", "FA" eller material som Asbest, Elektronik, Batterier, Kemikalier.
+                
+                INSTRUKTIONER:
+                1. Hitta Metadata (Leverantör, Datum, Adress).
+                2. Extrahera alla rader du kan hitta från dokumentet.
+                3. Farligt avfall: Sätt "isHazardous": true om det är elektronik, kemikalier, asbest etc.
+                4. Adress per rad: Om tabellen har kolumner som "Hämtställe", "Littera" eller "Projekt", extrahera dessa per rad.
+                
+                ⚠️ KRITISKT - DATUM/PERIOD-HANTERING:
+                Om dokumentet visar en PERIOD (datumintervall), extrahera ALLTID SLUTDATUMET!
+                Exempel:
+                - "Period 20251201-20251231" → använd "2025-12-31" (slutdatum!)
+                - "Period: 2025-12-01 - 2025-12-31" → använd "2025-12-31" (slutdatum!)
+                Slutdatumet representerar när arbetet SLUTFÖRDES ("Utförtdatum").
+${customInstructions ? `
+                EXTRA INSTRUKTIONER FRÅN ANVÄNDAREN (HÖGSTA PRIORITET):
+                ${customInstructions}
+` : ''}
+                JSON OUTPUT:
+                {
+                  "date": { "value": "YYYY-MM-DD", "confidence": Number },
+                  "supplier": { "value": "String", "confidence": Number },
+                  "weightKg": { "value": Number, "confidence": Number },
+                  "cost": { "value": Number, "confidence": Number },
+                  "totalCo2Saved": { "value": Number, "confidence": Number },
+                  "material": { "value": "String (Huvudkategori)", "confidence": Number },
+                  "address": { "value": "String", "confidence": Number },
+                  "receiver": { "value": "String", "confidence": Number },
+                  "lineItems": [
+                    {
+                      "material": { "value": "String", "confidence": Number },
+                      "handling": { "value": "String", "confidence": Number },
+                      "weightKg": { "value": Number, "confidence": Number },
+                      "co2Saved": { "value": Number, "confidence": Number },
+                      "percentage": { "value": "String", "confidence": Number },
+                      "isHazardous": { "value": Boolean, "confidence": Number },
+                      "address": { "value": "String", "confidence": Number },
+                      "receiver": { "value": "String", "confidence": Number }
+                    }
+                  ]
+                }
+                Returnera ENDAST ren JSON.`,
+              },
+            ],
+          },
+        ],
+      });
 
-    const validatedData = WasteRecordSchema.parse({
-        ...rawData,
-        lineItems: rawData.lineItems || []
-    });
+      log(`✓ Claude response received`);
 
-    await supabase.from("documents").update({
-      status: "needs_review",
-      extracted_data: validatedData
-    }).eq("id", documentId);
+      const textContent = message.content[0].type === 'text' ? message.content[0].text : "";
+      let rawData = extractJsonFromResponse(textContent);
+      
+      log(`✓ JSON parsed successfully`);
+
+      const validatedData = WasteRecordSchema.parse({
+          ...rawData,
+          lineItems: rawData.lineItems || [],
+          _processingLog: processingLog  // ✅ Include processing log
+      });
+      
+      const lineItemCount = validatedData.lineItems?.length || 0;
+      log(`✅ PDF re-verification complete: ${lineItemCount} line items extracted`);
+      log(`${"=".repeat(60)}`);
+
+      await supabase.from("documents").update({
+        status: "needs_review",
+        extracted_data: {
+          ...validatedData,
+          _processingLog: processingLog  // ✅ Include processing log in saved data
+        }
+      }).eq("id", documentId);
+      
+      revalidatePath(`/review/${documentId}`);
+      revalidatePath("/");
+      return;
+    }
 
     revalidatePath(`/review/${documentId}`);
     revalidatePath("/");

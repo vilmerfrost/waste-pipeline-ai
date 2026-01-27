@@ -349,7 +349,14 @@ TABLE DATA (chunk ${chunkNum}/${totalChunks}, ${chunkRows.length} rows)
 ═══════════════════════════════════════════════════════════════════════════════
 ${tsv}
 
+${settings.custom_instructions ? `═══════════════════════════════════════════════════════════════════════════════
+EXTRA INSTRUCTIONS FROM USER (HIGHEST PRIORITY)
 ═══════════════════════════════════════════════════════════════════════════════
+${settings.custom_instructions}
+
+⚠️ These instructions override any conflicting rules above. Follow them exactly.
+═══════════════════════════════════════════════════════════════════════════════
+` : ''}═══════════════════════════════════════════════════════════════════════════════
 JSON OUTPUT FORMAT (no markdown, no backticks)
 ═══════════════════════════════════════════════════════════════════════════════
 {"items":[{"date":"2024-01-16","location":"Address","material":"Material","weightKg":185,"unit":"Kg","receiver":"${receiver}","isHazardous":false}]}

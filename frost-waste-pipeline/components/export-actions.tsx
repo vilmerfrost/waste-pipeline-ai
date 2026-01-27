@@ -15,6 +15,20 @@ export function ExportActions({ documents }: { documents: any[] }) {
     return field;
   };
 
+  // ✅ Helper: Check if a value is a placeholder that should be replaced by document-level value
+  const isPlaceholder = (val: string): boolean => {
+    if (!val || typeof val !== 'string') return true;
+    const trimmed = val.trim().toLowerCase();
+    return (
+      trimmed === '' ||
+      trimmed === 'okänd mottagare' ||
+      trimmed === 'okänd adress' ||
+      trimmed === 'okänt material' ||
+      trimmed === 'saknas' ||
+      trimmed === 'unknown'
+    );
+  };
+
   // --- DEN NYA SMARTA DATA-BEREDAREN ---
   const prepareData = () => {
     const rows: any[] = [];
@@ -35,11 +49,13 @@ export function ExportActions({ documents }: { documents: any[] }) {
       // HÄMTA RÄTT GUID (prioritera settings, men ha demo-fallback)
       const customerGuid = DEMO_GUID_MAP[supplierName] || "";
 
-      // ADRESS-LOGIK: Rad > Huvud > Tom (Aldrig "Okänd")
-      const mainAddress = getVal(data.address);
-      const cleanMainAddress = mainAddress && mainAddress !== "Okänd adress" && mainAddress.trim() !== "" 
-        ? mainAddress.trim() 
-        : "";
+      // ✅ Document-level address: User edit > Extracted > Empty
+      const docAddress = getVal(data.documentMetadata?.address) || getVal(data.address);
+      const cleanMainAddress = !isPlaceholder(docAddress) ? docAddress.trim() : "";
+      
+      // ✅ Document-level receiver: User edit > Extracted > Empty
+      const docReceiver = getVal(data.documentMetadata?.receiver) || getVal(data.receiver);
+      const cleanReceiver = !isPlaceholder(docReceiver) ? docReceiver.trim() : "";
 
       // ✅ CRITICAL FIX: Document date priority order
       // 1. User-edited date (documentMetadata.date) - HIGHEST PRIORITY
@@ -74,7 +90,7 @@ export function ExportActions({ documents }: { documents: any[] }) {
         "Datum": documentDate, // ✅ Now uses proper priority chain
         "KundID-GUID": customerGuid,
         "Adress": cleanMainAddress, // Använd renad adress
-        "Mottagare": getVal(data.receiver) || "",
+        "Mottagare": cleanReceiver, // ✅ Uses document-level receiver (user edit or extracted)
         "Leverantör": supplierName,
         "Filnamn": doc.filename
       };
@@ -90,16 +106,13 @@ export function ExportActions({ documents }: { documents: any[] }) {
           // ✅ DATUM PER RAD: Use item date if exists, otherwise use document-level date
           const rowDate = getVal(item.date) || documentDate;
           
-          // Försök hitta rad-adress, annars ta huvudadress
-          let rowAddr = getVal(item.address);
-          if (!rowAddr || rowAddr === "Okänd adress" || rowAddr.trim() === "") {
-            rowAddr = cleanMainAddress; // Fallback till huvudadress
-          } else {
-            rowAddr = rowAddr.trim();
-          }
+          // ✅ ADRESS PER RAD: Use row address if NOT placeholder, otherwise document-level
+          const itemAddr = getVal(item.address);
+          const rowAddr = isPlaceholder(itemAddr) ? cleanMainAddress : itemAddr.trim();
 
-          // ✅ MOTTAGARE PER RAD: Använd från lineItem om det finns, annars från dokumentet
-          const rowReceiver = getVal(item.receiver) || getVal(data.receiver) || "";
+          // ✅ MOTTAGARE PER RAD: Use row receiver if NOT placeholder, otherwise document-level
+          const itemReceiver = getVal(item.receiver);
+          const rowReceiver = isPlaceholder(itemReceiver) ? cleanReceiver : itemReceiver.trim();
 
           rows.push({
             "Datum": rowDate, // ✅ ÅÅÅÅ-MM-DD format

@@ -50,12 +50,8 @@ export default async function ReviewPage({
   
   const nextDocId = nextDocs?.[0]?.id;
 
-  // Get signed URL for file preview
-  const { data } = await supabase.storage
-    .from("raw_documents")
-    .createSignedUrl(doc.storage_path, 3600);
-
-  const signedUrl = data?.signedUrl;
+  // Use preview endpoint to ensure inline display and avoid downloads
+  const previewUrl = `/api/preview-file?id=${doc.id}`;
   const isExcel = doc.filename.toLowerCase().endsWith(".xlsx") || 
                   doc.filename.toLowerCase().endsWith(".xls");
 
@@ -85,17 +81,37 @@ export default async function ReviewPage({
   const docReceiver = getValue(extractedData.documentMetadata?.receiver) || getValue(extractedData.receiver) || "";
   const docSupplier = getValue(extractedData.documentMetadata?.supplier) || getValue(extractedData.supplier) || "";
 
+  // ✅ Helper: Check if a value is a placeholder/default that should be replaced
+  const isPlaceholderValue = (val: string | null | undefined): boolean => {
+    if (!val || typeof val !== 'string') return true;
+    const trimmed = val.trim().toLowerCase();
+    return (
+      trimmed === '' ||
+      trimmed === 'okänd mottagare' ||
+      trimmed === 'okänd adress' ||
+      trimmed === 'okänt material' ||
+      trimmed === 'saknas' ||
+      trimmed === 'unknown'
+    );
+  };
+
   // Create export preview rows (exactly what will be in Excel)
-  const exportPreviewRows = lineItems.map((item: any, idx: number) => ({
-    rowNum: idx + 1,
-    date: getValue(item.date) || docDate,
-    location: getValue(item.location) || getValue(item.address) || docAddress,
-    material: getValue(item.material) || "Okänt material",
-    weightKg: parseFloat(String(getValue(item.weightKg) || getValue(item.weight) || 0)),
-    unit: getValue(item.unit) || "Kg",
-    receiver: getValue(item.receiver) || docReceiver || "Okänd mottagare",
-    isHazardous: getValue(item.isHazardous) || false,
-  }));
+  // ✅ FIX: Treat placeholder values like "Okänd mottagare" as empty so document-level values apply
+  const exportPreviewRows = lineItems.map((item: any, idx: number) => {
+    const rowReceiver = getValue(item.receiver);
+    const rowLocation = getValue(item.location) || getValue(item.address);
+    
+    return {
+      rowNum: idx + 1,
+      date: getValue(item.date) || docDate,
+      location: isPlaceholderValue(rowLocation) ? docAddress : rowLocation,
+      material: getValue(item.material) || "Okänt material",
+      weightKg: parseFloat(String(getValue(item.weightKg) || getValue(item.weight) || 0)),
+      unit: getValue(item.unit) || "Kg",
+      receiver: isPlaceholderValue(rowReceiver) ? (docReceiver || "Okänd mottagare") : rowReceiver,
+      isHazardous: getValue(item.isHazardous) || false,
+    };
+  });
   
   // Calculate stats from lineItems
   const uniqueAddresses = new Set(
@@ -509,15 +525,33 @@ export default async function ReviewPage({
         <div className="mb-6">
           <div className="bg-white rounded-lg border border-gray-200 p-6">
             <h2 className="text-lg font-semibold mb-4">Förhandsvisning</h2>
-            {signedUrl ? (
+            {previewUrl ? (
               isExcel ? (
-                <ExcelViewer url={signedUrl} />
+                <ExcelViewer url={previewUrl} />
               ) : (
-                <iframe 
-                  src={signedUrl} 
-                  className="w-full h-full min-h-[600px] rounded border border-gray-200" 
-                  title="PDF Viewer" 
-                />
+                <object
+                  data={previewUrl}
+                  type="application/pdf"
+                  className="w-full h-full min-h-[600px] rounded border border-gray-200"
+                  title="PDF Viewer"
+                >
+                  <embed
+                    src={previewUrl}
+                    type="application/pdf"
+                    className="w-full h-full min-h-[600px] rounded border border-gray-200"
+                  />
+                  <div className="text-center py-8 text-gray-500">
+                    <p>Din webbläsare stödjer inte PDF-förhandsvisning.</p>
+                    <a
+                      href={previewUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:underline"
+                    >
+                      Öppna PDF i ny flik
+                    </a>
+                  </div>
+                </object>
               )
             ) : (
               <div className="text-center py-8 text-gray-500">

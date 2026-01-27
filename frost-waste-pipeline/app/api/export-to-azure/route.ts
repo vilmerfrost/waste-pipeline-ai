@@ -18,28 +18,42 @@ function getValue(field: any): any {
   return field;
 }
 
+// ✅ Helper: Check if a value is a placeholder/default that should be replaced by document-level value
+function isPlaceholderValue(val: string | null | undefined): boolean {
+  if (!val || typeof val !== 'string') return true;
+  const trimmed = val.trim().toLowerCase();
+  return (
+    trimmed === '' ||
+    trimmed === 'okänd mottagare' ||
+    trimmed === 'okänd adress' ||
+    trimmed === 'okänt material' ||
+    trimmed === 'saknas' ||
+    trimmed === 'unknown'
+  );
+}
+
 /**
  * Clean a line item for export
- * IMPORTANT: documentDate (user-edited or extracted) should be passed as primary fallback
+ * IMPORTANT: Document-level values should override placeholder values like "Okänd mottagare"
  * This ensures "What you see in Preview is what you get in Excel"
  */
 function cleanLineItem(
   item: any, 
   documentFilename?: string,
-  documentDate?: string | null  // ✅ NEW: Document-level date from user edits or extraction
+  documentDate?: string | null,
+  documentAddress?: string | null,  // ✅ NEW: Document-level address
+  documentReceiver?: string | null  // ✅ NEW: Document-level receiver
 ): any {
   // PRIORITY 1: Individual row date (if set per-row)
   let date = getValue(item.date);
   
   // PRIORITY 2: Document-level date (user-edited date from form!)
-  // This is the CRITICAL fix - we must respect the user's edited date
   if (!date && documentDate) {
     date = documentDate;
     console.log(`   📅 Using document-level date: ${date}`);
   }
   
   // PRIORITY 3: Try to extract from document filename
-  // Remove (1), (2), etc. before extracting to handle duplicate filenames
   if (!date && documentFilename) {
     const cleanFilename = documentFilename.replace(/\s*\(\d+\)/g, '');
     const match = cleanFilename.match(/(\d{4}-\d{2}-\d{2})/);
@@ -49,19 +63,27 @@ function cleanLineItem(
     }
   }
   
-  // PRIORITY 4: LAST RESORT - use today as fallback (should rarely happen)
+  // PRIORITY 4: LAST RESORT - use today as fallback
   if (!date) {
     date = new Date().toISOString().split('T')[0];
     console.log(`   ⚠️  No date found anywhere, using today as last resort: ${date}`);
   }
   
+  // ✅ FIX: Handle location - use document-level if row has placeholder
+  const rowLocation = getValue(item.location) || getValue(item.address);
+  const location = isPlaceholderValue(rowLocation) ? (documentAddress || "") : rowLocation;
+  
+  // ✅ FIX: Handle receiver - use document-level if row has placeholder  
+  const rowReceiver = getValue(item.receiver);
+  const receiver = isPlaceholderValue(rowReceiver) ? (documentReceiver || "") : rowReceiver;
+  
   return {
     date: date,  // ✅ ALWAYS has a value!
-    location: getValue(item.location) || getValue(item.address) || "",
+    location: location,
     material: getValue(item.material) || "Okänt material",
     weightKg: parseFloat(String(getValue(item.weightKg) || getValue(item.weight) || 0)),
     unit: getValue(item.unit) || "Kg",
-    receiver: getValue(item.receiver) || "",
+    receiver: receiver,
     isHazardous: getValue(item.isHazardous) || false,
   };
 }
@@ -161,22 +183,20 @@ async function createExcelForDocument(doc: any): Promise<Buffer> {
   // Add data rows from this document
   const lineItems = doc.extracted_data?.lineItems || [];
   
-  // Get document-level date (PRIORITY ORDER):
-  // 1. User-edited date from documentMetadata (most important - what user sees!)
-  // 2. Top-level date field (AI-extracted)
-  // 3. Extract from filename
-  // 4. Today's date (last resort)
-  let documentDate: string | null = null;
+  // Get document-level values (PRIORITY ORDER):
+  // 1. User-edited values from documentMetadata (most important - what user sees!)
+  // 2. Top-level field (AI-extracted)
+  // 3. Extract from filename (for date)
+  // 4. Default/empty (last resort)
   
-  // Check documentMetadata first (user-edited values)
+  // === DATE ===
+  let documentDate: string | null = null;
   if (doc.extracted_data?.documentMetadata?.date) {
     documentDate = getValue(doc.extracted_data.documentMetadata.date);
   }
-  // Fallback to top-level date field
   if (!documentDate && doc.extracted_data?.date) {
     documentDate = getValue(doc.extracted_data.date);
   }
-  // Fallback to filename extraction
   if (!documentDate && doc.filename) {
     const cleanFilename = doc.filename.replace(/\s*\(\d+\)/g, '');
     const match = cleanFilename.match(/(\d{4}-\d{2}-\d{2})/);
@@ -185,15 +205,35 @@ async function createExcelForDocument(doc: any): Promise<Buffer> {
     }
   }
   
+  // === ADDRESS (Hämtställe) ===
+  let documentAddress: string | null = null;
+  if (doc.extracted_data?.documentMetadata?.address) {
+    documentAddress = getValue(doc.extracted_data.documentMetadata.address);
+  }
+  if (!documentAddress || isPlaceholderValue(documentAddress)) {
+    documentAddress = getValue(doc.extracted_data?.address) || null;
+  }
+  
+  // === RECEIVER (Mottagare/Leveransställe) ===
+  let documentReceiver: string | null = null;
+  if (doc.extracted_data?.documentMetadata?.receiver) {
+    documentReceiver = getValue(doc.extracted_data.documentMetadata.receiver);
+  }
+  if (!documentReceiver || isPlaceholderValue(documentReceiver)) {
+    documentReceiver = getValue(doc.extracted_data?.receiver) || null;
+  }
+  
   console.log(`   Processing ${lineItems.length} line items`);
-  console.log(`   Document date (from user/extraction): ${documentDate || 'none'}`);
+  console.log(`   Document date: ${documentDate || 'none'}`);
+  console.log(`   Document address: ${documentAddress || 'none'}`);
+  console.log(`   Document receiver: ${documentReceiver || 'none'}`);
   
   for (const item of lineItems) {
-    // ✅ CRITICAL FIX: Pass document-level date to cleanLineItem
-    // This ensures user-edited date is respected
-    const cleanItem = cleanLineItem(item, doc.filename, documentDate);
+    // ✅ CRITICAL FIX: Pass all document-level values to cleanLineItem
+    // This ensures user-edited values override row-level placeholder values
+    const cleanItem = cleanLineItem(item, doc.filename, documentDate, documentAddress, documentReceiver);
     
-    // cleanItem.date now already has the correct date with proper fallback chain
+    // cleanItem now has the correct values with proper fallback chain
     const finalDate = cleanItem.date;
     
     worksheet.addRow({

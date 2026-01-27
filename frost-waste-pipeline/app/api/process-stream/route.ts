@@ -110,8 +110,35 @@ export async function GET(req: Request) {
         onLog(`📊 Starting adaptive extraction...`, 'info');
         
         const workbook = XLSX.read(arrayBuffer);
-        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-        const jsonData = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: "" });
+        
+        // ✅ FIX: Process ALL sheets, not just the first one!
+        onLog(`📄 Excel has ${workbook.SheetNames.length} sheet(s): ${workbook.SheetNames.join(', ')}`, 'info');
+        
+        let allData: any[][] = [];
+        
+        for (const sheetName of workbook.SheetNames) {
+          const sheet = workbook.Sheets[sheetName];
+          const sheetData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" }) as any[][];
+          
+          if (sheetData.length === 0) {
+            onLog(`   ⏭️ Skipping empty sheet: ${sheetName}`, 'info');
+            continue;
+          }
+          
+          onLog(`   📄 Sheet "${sheetName}": ${sheetData.length} rows`, 'info');
+          
+          if (allData.length === 0) {
+            allData = sheetData;
+          } else {
+            const firstRowLooksLikeHeader = sheetData[0]?.some((cell: any) => 
+              String(cell).toLowerCase().match(/datum|material|vikt|adress|kvantitet/)
+            );
+            allData = [...allData, ...(firstRowLooksLikeHeader && sheetData.length > 1 ? sheetData.slice(1) : sheetData)];
+          }
+        }
+        
+        const jsonData = allData;
+        onLog(`✅ Combined ${jsonData.length} rows from all sheets`, 'success');
         
         // Run extraction with log callback
         const adaptiveResult = await extractAdaptive(
