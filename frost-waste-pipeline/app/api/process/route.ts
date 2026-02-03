@@ -12,38 +12,29 @@ import { processDocument } from "@/lib/document-processor";
 /**
  * Extract date from filename (YYYY-MM-DD format)
  * Handles duplicate filenames like "file (1).xlsx" by cleaning them first
+ * FIXED: Only matches valid dates (2000-2029), not blob IDs like "1769504173193"
  */
 function extractDateFromFilename(filename: string): string | null {
   // Remove (1), (2), etc. before extracting to handle duplicate filenames
   const cleanFilename = filename.replace(/\s*\(\d+\)/g, '');
   
-  // Try multiple patterns
-  const patterns = [
-    /(\d{4}-\d{2}-\d{2})/,           // 2025-10-13
-    /(\d{4}_\d{2}_\d{2})/,           // 2025_10_13
-    /(\d{4}\.\d{2}\.\d{2})/,         // 2025.10.13
-    /(\d{8})/,                        // 20251013
-  ];
-  
-  for (const pattern of patterns) {
-    const match = cleanFilename.match(pattern);
-    if (match) {
-      let dateStr = match[1];
-      // Convert YYYYMMDD to YYYY-MM-DD
-      if (dateStr.length === 8 && !dateStr.includes('-')) {
-        dateStr = `${dateStr.slice(0,4)}-${dateStr.slice(4,6)}-${dateStr.slice(6,8)}`;
-      }
-      // Normalize separators
-      dateStr = dateStr.replace(/[_.]/g, '-');
-      
-      // Validate date
-      const date = new Date(dateStr);
-      if (!isNaN(date.getTime()) && dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
-        return dateStr;
-      }
-    }
-  }
-  
+  // Pattern 1: YYYY-MM-DD (ISO format) - validate year 2000-2029, month 01-12, day 01-31
+  const isoMatch = cleanFilename.match(/\b(20[0-2]\d)-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b/);
+  if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+
+  // Pattern 2: YYYY_MM_DD or YYYY.MM.DD (with separators)
+  const sepMatch = cleanFilename.match(/\b(20[0-2]\d)[_.]+(0[1-9]|1[0-2])[_.]+(0[1-9]|[12]\d|3[01])\b/);
+  if (sepMatch) return `${sepMatch[1]}-${sepMatch[2]}-${sepMatch[3]}`;
+
+  // Pattern 3: YYYYMMDD (8 digits only, starting with 20)
+  const compactMatch = cleanFilename.match(/\b(20[0-2]\d)(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\b/);
+  if (compactMatch) return `${compactMatch[1]}-${compactMatch[2]}-${compactMatch[3]}`;
+
+  // Pattern 4: DD-MM-YYYY or DD.MM.YYYY or DD/MM/YYYY (European format)
+  const euroMatch = cleanFilename.match(/\b(0[1-9]|[12]\d|3[01])[-./](0[1-9]|1[0-2])[-./](20[0-2]\d)\b/);
+  if (euroMatch) return `${euroMatch[3]}-${euroMatch[2]}-${euroMatch[1]}`;
+
+  // No valid date found - return null instead of garbage
   return null;
 }
 

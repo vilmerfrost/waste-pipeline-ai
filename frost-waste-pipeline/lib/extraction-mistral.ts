@@ -53,8 +53,8 @@ export async function extractWithMistralOCR(
     const ocrResponse = await mistral.ocr.process({
       model: "mistral-ocr-latest",
       document: {
-        type: "image_url",
-        imageUrl: `data:application/pdf;base64,${base64Pdf}`,
+        type: "document_url",
+        documentUrl: `data:application/pdf;base64,${base64Pdf}`,
       },
     });
 
@@ -197,22 +197,24 @@ OUTPUT FORMAT (JSON only, no markdown, no backticks)
 }
 
 function extractDateFromFilename(filename: string): string | null {
-  const patterns = [
-    /(\d{4})-(\d{2})-(\d{2})/,
-    /(\d{4})(\d{2})(\d{2})/,
-    /(\d{2})-(\d{2})-(\d{4})/,
-    /(\d{2})(\d{2})(\d{4})/,
-  ];
-
-  for (const pattern of patterns) {
-    const match = filename.match(pattern);
-    if (match) {
-      if (match[1].length === 4) {
-        return `${match[1]}-${match[2]}-${match[3]}`;
-      } else {
-        return `${match[3]}-${match[2]}-${match[1]}`;
-      }
-    }
+  // Pattern 1: YYYY-MM-DD (ISO format)
+  const isoMatch = filename.match(/\b(20[0-2]\d)-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
   }
+
+  // Pattern 2: YYYYMMDD (8 digits starting with 20)
+  const compactMatch = filename.match(/\b(20[0-2]\d)(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\b/);
+  if (compactMatch) {
+    return `${compactMatch[1]}-${compactMatch[2]}-${compactMatch[3]}`;
+  }
+
+  // Pattern 3: DD-MM-YYYY or DD.MM.YYYY or DD/MM/YYYY
+  const euroMatch = filename.match(/\b(0[1-9]|[12]\d|3[01])[-./](0[1-9]|1[0-2])[-./](20[0-2]\d)\b/);
+  if (euroMatch) {
+    return `${euroMatch[3]}-${euroMatch[2]}-${euroMatch[1]}`;
+  }
+
+  // No valid date found - return null instead of garbage
   return null;
 }

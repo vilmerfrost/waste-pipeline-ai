@@ -666,9 +666,8 @@ export default async function CollecctDashboard({
             </div>
           )}
         </div>
-          </div>
-        )}
         </div>
+        )}
       </div>
     </div>
   );

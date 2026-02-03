@@ -6,6 +6,18 @@ interface ModelBadgeProps {
 }
 
 const MODEL_COLORS: Record<string, { bg: string; text: string; label: string }> = {
+  // Primary extraction models (match actual model path values)
+  "mistral-ocr": {
+    bg: "bg-orange-100",
+    text: "text-orange-700",
+    label: "Mistral OCR",
+  },
+  "gemini-agentic": {
+    bg: "bg-blue-100",
+    text: "text-blue-700",
+    label: "Gemini Flash",
+  },
+  // Legacy aliases (for backwards compatibility)
   "mistral-ocr-3": {
     bg: "bg-orange-100",
     text: "text-orange-700",
@@ -16,6 +28,7 @@ const MODEL_COLORS: Record<string, { bg: string; text: string; label: string }> 
     text: "text-blue-700",
     label: "Gemini Flash",
   },
+  // Pipeline stages
   "sonnet-reconciliation": {
     bg: "bg-purple-100",
     text: "text-purple-700",
@@ -26,6 +39,23 @@ const MODEL_COLORS: Record<string, { bg: string; text: string; label: string }> 
     text: "text-green-700",
     label: "Verified",
   },
+  // Adaptive extraction model names
+  "haiku": {
+    bg: "bg-teal-100",
+    text: "text-teal-700",
+    label: "Haiku",
+  },
+  "sonnet-4-5": {
+    bg: "bg-purple-100",
+    text: "text-purple-700",
+    label: "Sonnet 4.5",
+  },
+  "adaptive": {
+    bg: "bg-indigo-100",
+    text: "text-indigo-700",
+    label: "Adaptive",
+  },
+  // Fallback
   "legacy": {
     bg: "bg-gray-100",
     text: "text-gray-700",
