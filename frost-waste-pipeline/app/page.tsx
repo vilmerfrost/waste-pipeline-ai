@@ -10,7 +10,7 @@ import { UploadZone } from "@/components/upload-zone";
 import { FileText, ArrowRight, Archive as ArchiveIcon } from "lucide-react";
 import { revalidatePath } from "next/cache";
 import Link from "next/link"; 
-import { FileActions } from "@/components/file-actions";
+import { DocumentList } from "@/components/document-list";
 
 const MOCK_USER = {
   id: "00000000-0000-0000-0000-000000000000",
@@ -116,77 +116,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ q
           <UploadZone />
         </div>
 
-        <div className="flex flex-col gap-6">
-          <div className="flex justify-between items-end border-b border-slate-100 pb-4">
-             <h2 className="font-serif text-2xl text-slate-800">Senaste filer</h2>
-             <div className="w-64">
-               <SearchBar />
-             </div>
-          </div>
-
-          <div className="overflow-hidden bg-white">
-            <table className="w-full text-left text-sm text-slate-600">
-              <thead className="text-slate-400 font-medium text-xs uppercase tracking-wider">
-                <tr>
-                  <th className="py-4 pr-4 font-normal">Dokument</th>
-                  <th className="py-4 px-4 font-normal">Datum</th>
-                  <th className="py-4 px-4 font-normal">Status</th>
-                  <th className="py-4 pl-4 text-right font-normal">Hantera</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50">
-                {documents?.map((doc) => {
-                  // Hämta värden säkert med nya formatet
-                  const material = getValue(doc.extracted_data?.material);
-                  const date = getValue(doc.extracted_data?.date);
-                  
-                  return (
-                    <tr key={doc.id} className="group hover:bg-slate-50/50 transition-colors">
-                      <td className="py-4 pr-4">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 bg-slate-50 rounded-lg text-slate-400 group-hover:text-blue-500 group-hover:bg-blue-50 transition-colors">
-                              <FileText className="w-4 h-4" />
-                          </div>
-                          <div>
-                            <p className="font-medium text-slate-700">{doc.filename}</p>
-                            {material && (
-                              <p className="text-xs text-slate-400 mt-0.5">{material}</p>
-                            )}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="py-4 px-4 font-mono text-xs text-slate-500">
-                        {date || new Date(doc.created_at).toLocaleDateString("sv-SE")}
-                      </td>
-                      <td className="py-4 px-4"><StatusBadge status={doc.status} /></td>
-                      
-                      <td className="py-4 pl-4 text-right">
-                        <div className="flex items-center justify-end gap-3">
-                          {doc.status === "needs_review" && (
-                              <Link 
-                              href={`/review/${doc.id}`}
-                              className="text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline px-2 py-1"
-                              >
-                              Granska
-                              </Link>
-                          )}
-                          <FileActions doc={doc} />
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {(!documents || documents.length === 0) && (
-                   <tr>
-                     <td colSpan={4} className="py-12 text-center text-slate-400 font-light italic">
-                        Inga dokument hittades. Ladda upp en fil för att starta.
-                     </td>
-                   </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <DocumentList documents={documents || []} />
       </div>
     </main>
   );

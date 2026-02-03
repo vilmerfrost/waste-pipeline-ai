@@ -1,6 +1,8 @@
 import { createServiceRoleClient } from "@/lib/supabase";
+import React from "react";
 import Link from "next/link";
-import { FileText, CheckCircle2, AlertCircle, Activity, RefreshCw, ArrowLeft, Download, Settings, Home } from "lucide-react";
+import { FileText, CheckCircle2, AlertCircle, Activity, RefreshCw, ArrowLeft, Download, Settings, Home, Archive } from "lucide-react";
+import { CollecctMassArchiveWrapper } from "@/components/collecct-mass-archive-wrapper";
 import { AutoFetchButton } from "@/components/auto-fetch-button";
 import { BatchProcessButton } from "@/components/batch-process-button";
 import { GranskaButton } from "@/components/granska-button";
@@ -20,11 +22,12 @@ export const dynamic = "force-dynamic";
 export default async function CollecctDashboard({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string; page?: string; perPage?: string }>;
+  searchParams: Promise<{ tab?: string; page?: string; perPage?: string; mode?: string }>;
 }) {
   const supabase = createServiceRoleClient();
   const params = await searchParams;
   const activeTab = params.tab || "active";
+  const isMassArchive = params.mode === "mass-archive";
   
   // Pagination params
   const currentPage = Math.max(1, parseInt(params.page || "1", 10));
@@ -146,6 +149,16 @@ export default async function CollecctDashboard({
 
             {/* Right: Action buttons */}
             <div className="flex items-center gap-3">
+              {activeTab === "active" && (
+                  <Link
+                    href={isMassArchive ? "/collecct" : "/collecct?mode=mass-archive"}
+                    className={`flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-all text-sm font-medium ${isMassArchive ? 'bg-gray-100 ring-2 ring-gray-200' : ''}`}
+                  >
+                    <Archive className="w-4 h-4" />
+                    <span>{isMassArchive ? "Avsluta" : "Mass-arkivera"}</span>
+                  </Link>
+              )}
+
               {activeTab === "active" && approvedDocs.length > 0 && (
                 <ExportToAzureButton 
                   selectedDocuments={approvedDocs.map(d => d.id)}
@@ -217,8 +230,18 @@ export default async function CollecctDashboard({
         </div>
       </div>
 
-      {/* Stats Cards */}
+      {/* Content */}
       <div className="max-w-7xl mx-auto px-6 py-8">
+        {isMassArchive ? (
+             <CollecctMassArchiveWrapper 
+                documents={documents?.filter(d => !d.exported_at).map(d => ({
+                    id: d.id,
+                    filename: d.filename,
+                    status: d.status
+                })) || []} 
+             />
+        ) : (
+          <div>
         {/* Batch Processing UI */}
         {uploadedDocs.length > 0 && (
           <BatchProcessButton uploadedDocs={uploadedDocs} />
@@ -642,6 +665,9 @@ export default async function CollecctDashboard({
               })}
             </div>
           )}
+        </div>
+          </div>
+        )}
         </div>
       </div>
     </div>
