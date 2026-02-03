@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import { Loader2 } from "lucide-react";
+import { useState, useMemo } from "react";
+import { Loader2, FileText, FileSpreadsheet, Filter } from "lucide-react";
 import { BatchResultModal } from "./batch-result-modal";
+import { formatRelativeTime } from "@/lib/time-utils";
 
 interface BatchProcessButtonProps {
   uploadedDocs: any[];
@@ -14,7 +15,20 @@ export function BatchProcessButton({ uploadedDocs, onSuccess }: BatchProcessButt
   const [selectedDocs, setSelectedDocs] = useState<Set<string>>(new Set());
   const [showResultModal, setShowResultModal] = useState(false);
   const [batchResults, setBatchResults] = useState<any>(null);
+  const [filterType, setFilterType] = useState<"all" | "pdf" | "excel">("all");
   
+  // Filter docs
+  const filteredDocs = useMemo(() => {
+    return uploadedDocs.filter(doc => {
+      if (filterType === "all") return true;
+      if (filterType === "pdf") return doc.filename.toLowerCase().endsWith(".pdf");
+      if (filterType === "excel") {
+        return doc.filename.toLowerCase().endsWith(".xlsx") || doc.filename.toLowerCase().endsWith(".xls");
+      }
+      return true;
+    });
+  }, [uploadedDocs, filterType]);
+
   const toggleDoc = (docId: string) => {
     const newSelected = new Set(selectedDocs);
     if (newSelected.has(docId)) {
@@ -26,7 +40,8 @@ export function BatchProcessButton({ uploadedDocs, onSuccess }: BatchProcessButt
   };
   
   const selectAll = () => {
-    setSelectedDocs(new Set(uploadedDocs.map(d => d.id)));
+    // Only select visible filtered docs
+    setSelectedDocs(new Set(filteredDocs.map(d => d.id)));
   };
   
   const deselectAll = () => {
@@ -130,14 +145,19 @@ export function BatchProcessButton({ uploadedDocs, onSuccess }: BatchProcessButt
     <>
       {/* Loading Overlay */}
       {isProcessing && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 shadow-xl max-w-md mx-4">
-            <div className="flex items-center gap-4">
-              <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 backdrop-blur-sm">
+          <div className="bg-white rounded-xl p-8 shadow-2xl max-w-md mx-4 animate-in fade-in zoom-in-95">
+            <div className="flex flex-col items-center gap-4 text-center">
+              <div className="relative">
+                <div className="w-16 h-16 border-4 border-blue-100 border-t-blue-600 rounded-full animate-spin"></div>
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <Loader2 className="w-6 h-6 text-blue-600" />
+                </div>
+              </div>
               <div>
-                <h3 className="font-semibold text-gray-900">Processar dokument</h3>
-                <p className="text-sm text-gray-600">
-                  Behandlar {selectedDocs.size} dokument...
+                <h3 className="text-xl font-bold text-gray-900 mb-1">Processar dokument</h3>
+                <p className="text-gray-500">
+                  Behandlar {selectedDocs.size} dokument med AI...
                 </p>
               </div>
             </div>
@@ -145,78 +165,165 @@ export function BatchProcessButton({ uploadedDocs, onSuccess }: BatchProcessButt
         </div>
       )}
       
-      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-      <div className="flex items-center justify-between mb-3">
-        <div>
-          <h3 className="font-semibold text-blue-900">
-            Batch-granskning
-          </h3>
-          <p className="text-sm text-blue-700">
-            {uploadedDocs.length} uppladdade dokument väntar på granskning
-          </p>
+      <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden mb-8">
+        {/* Header Section */}
+        <div className="p-6 border-b border-gray-100 bg-gradient-to-r from-blue-50/50 to-white">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                Batch-granskning
+                <span className="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full font-medium">
+                  Nyhet
+                </span>
+              </h3>
+              <p className="text-sm text-gray-500 mt-1">
+                Välj dokument att analysera med AI
+              </p>
+            </div>
+            
+            <div className="flex items-center gap-3 bg-gray-100/50 p-1 rounded-lg">
+              <button
+                onClick={() => setFilterType("all")}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                  filterType === "all" 
+                    ? "bg-white text-gray-900 shadow-sm" 
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                Alla ({uploadedDocs.length})
+              </button>
+              <button
+                onClick={() => setFilterType("pdf")}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 ${
+                  filterType === "pdf" 
+                    ? "bg-white text-red-700 shadow-sm" 
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                <FileText className="w-3 h-3" />
+                PDF
+              </button>
+              <button
+                onClick={() => setFilterType("excel")}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 ${
+                  filterType === "excel" 
+                    ? "bg-white text-green-700 shadow-sm" 
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                <FileSpreadsheet className="w-3 h-3" />
+                Excel
+              </button>
+            </div>
+          </div>
         </div>
         
-        <div className="flex gap-2">
+        {/* Selection Stats Bar */}
+        <div className="px-6 py-3 bg-gray-50 border-b border-gray-100 flex items-center justify-between text-xs">
+          <span className="font-medium text-gray-700">
+            Valda: <span className="text-blue-600">{selectedDocs.size}</span> av {filteredDocs.length}
+          </span>
+          <div className="flex gap-3">
+            <button
+              onClick={selectAll}
+              className="text-blue-600 hover:text-blue-800 font-medium hover:underline"
+            >
+              Välj alla
+            </button>
+            <span className="text-gray-300">|</span>
+            <button
+              onClick={deselectAll}
+              className="text-gray-500 hover:text-gray-700 font-medium hover:underline"
+            >
+              Rensa val
+            </button>
+          </div>
+        </div>
+        
+        {/* Document List */}
+        <div className="max-h-[320px] overflow-y-auto">
+          {filteredDocs.length === 0 ? (
+            <div className="p-8 text-center text-gray-500 text-sm">
+              Inga dokument matchar filtret.
+            </div>
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {filteredDocs.map(doc => {
+                const isPdf = doc.filename.toLowerCase().endsWith(".pdf");
+                const isSelected = selectedDocs.has(doc.id);
+                
+                return (
+                  <label 
+                    key={doc.id}
+                    className={`flex items-center gap-4 p-4 cursor-pointer transition-colors group ${
+                      isSelected ? "bg-blue-50/50" : "hover:bg-gray-50"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleDoc(doc.id)}
+                      className="w-5 h-5 text-blue-600 rounded border-gray-300 focus:ring-blue-500 transition-all"
+                    />
+                    
+                    <div className={`p-2 rounded-lg ${
+                      isPdf ? "bg-red-50 text-red-600" : "bg-green-50 text-green-600"
+                    }`}>
+                      {isPdf ? (
+                        <FileText className="w-5 h-5" />
+                      ) : (
+                        <FileSpreadsheet className="w-5 h-5" />
+                      )}
+                    </div>
+                    
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className={`text-sm font-medium truncate ${
+                          isSelected ? "text-blue-900" : "text-gray-900"
+                        }`}>
+                          {doc.filename}
+                        </span>
+                        <span className="text-xs text-gray-400 group-hover:text-gray-500 whitespace-nowrap ml-4">
+                          {formatRelativeTime(doc.created_at)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">
+                          {(doc.size / 1024).toFixed(0)} KB
+                        </span>
+                      </div>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        
+        {/* Footer Action */}
+        <div className="p-4 border-t border-gray-100 bg-gray-50">
           <button
-            onClick={selectAll}
-            className="text-sm text-blue-600 hover:text-blue-800 underline"
+            onClick={processBatch}
+            disabled={isProcessing || selectedDocs.size === 0}
+            className={`w-full py-3 rounded-lg font-medium transition-all shadow-sm flex items-center justify-center gap-2 ${
+              isProcessing || selectedDocs.size === 0
+                ? "bg-gray-200 text-gray-400 cursor-not-allowed"
+                : "bg-blue-600 hover:bg-blue-700 text-white hover:shadow-md active:scale-[0.99]"
+            }`}
           >
-            Välj alla
-          </button>
-          <span className="text-gray-400">|</span>
-          <button
-            onClick={deselectAll}
-            className="text-sm text-blue-600 hover:text-blue-800 underline"
-          >
-            Avmarkera alla
+            {isProcessing ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin" />
+                Bearbetar...
+              </>
+            ) : (
+              <>
+                <Filter className="w-4 h-4" />
+                Starta analys för {selectedDocs.size > 0 ? selectedDocs.size : 0} dokument
+              </>
+            )}
           </button>
         </div>
-      </div>
-      
-      {/* Document checkboxes */}
-      <div className="space-y-2 mb-4 max-h-60 overflow-y-auto">
-        {uploadedDocs.map(doc => (
-          <label 
-            key={doc.id}
-            className="flex items-center gap-3 p-2 hover:bg-blue-100 rounded cursor-pointer transition-colors"
-          >
-            <input
-              type="checkbox"
-              checked={selectedDocs.has(doc.id)}
-              onChange={() => toggleDoc(doc.id)}
-              className="w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
-            />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-gray-900 truncate">
-                {doc.filename}
-              </div>
-              <div className="text-xs text-gray-600">
-                {new Date(doc.created_at).toLocaleString('sv-SE')}
-              </div>
-            </div>
-          </label>
-        ))}
-      </div>
-      
-      {/* Process button */}
-      <button
-        onClick={processBatch}
-        disabled={isProcessing || selectedDocs.size === 0}
-        className={`w-full px-4 py-3 rounded-lg font-medium transition-colors ${
-          isProcessing || selectedDocs.size === 0
-            ? "bg-gray-400 text-gray-200 cursor-not-allowed"
-            : "bg-blue-600 hover:bg-blue-700 text-white"
-        }`}
-      >
-        {isProcessing ? (
-          <span className="flex items-center justify-center gap-2">
-            <Loader2 className="w-5 h-5 animate-spin" />
-            Behandlar {selectedDocs.size} dokument...
-          </span>
-        ) : (
-          `Granska ${selectedDocs.size > 0 ? selectedDocs.size : 'valda'} dokument`
-        )}
-      </button>
       </div>
       
       <BatchResultModal

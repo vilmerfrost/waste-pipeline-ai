@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import * as XLSX from "xlsx";
 import { extractAdaptive } from "@/lib/adaptive-extraction";
+import { processDocument } from "@/lib/document-processor";
 
 // ============================================================================
 // DATE EXTRACTION HELPERS
@@ -11,38 +12,29 @@ import { extractAdaptive } from "@/lib/adaptive-extraction";
 /**
  * Extract date from filename (YYYY-MM-DD format)
  * Handles duplicate filenames like "file (1).xlsx" by cleaning them first
+ * FIXED: Only matches valid dates (2000-2029), not blob IDs like "1769504173193"
  */
 function extractDateFromFilename(filename: string): string | null {
   // Remove (1), (2), etc. before extracting to handle duplicate filenames
   const cleanFilename = filename.replace(/\s*\(\d+\)/g, '');
   
-  // Try multiple patterns
-  const patterns = [
-    /(\d{4}-\d{2}-\d{2})/,           // 2025-10-13
-    /(\d{4}_\d{2}_\d{2})/,           // 2025_10_13
-    /(\d{4}\.\d{2}\.\d{2})/,         // 2025.10.13
-    /(\d{8})/,                        // 20251013
-  ];
-  
-  for (const pattern of patterns) {
-    const match = cleanFilename.match(pattern);
-    if (match) {
-      let dateStr = match[1];
-      // Convert YYYYMMDD to YYYY-MM-DD
-      if (dateStr.length === 8 && !dateStr.includes('-')) {
-        dateStr = `${dateStr.slice(0,4)}-${dateStr.slice(4,6)}-${dateStr.slice(6,8)}`;
-      }
-      // Normalize separators
-      dateStr = dateStr.replace(/[_.]/g, '-');
-      
-      // Validate date
-      const date = new Date(dateStr);
-      if (!isNaN(date.getTime()) && dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
-        return dateStr;
-      }
-    }
-  }
-  
+  // Pattern 1: YYYY-MM-DD (ISO format) - validate year 2000-2029, month 01-12, day 01-31
+  const isoMatch = cleanFilename.match(/\b(20[0-2]\d)-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b/);
+  if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+
+  // Pattern 2: YYYY_MM_DD or YYYY.MM.DD (with separators)
+  const sepMatch = cleanFilename.match(/\b(20[0-2]\d)[_.]+(0[1-9]|1[0-2])[_.]+(0[1-9]|[12]\d|3[01])\b/);
+  if (sepMatch) return `${sepMatch[1]}-${sepMatch[2]}-${sepMatch[3]}`;
+
+  // Pattern 3: YYYYMMDD (8 digits only, starting with 20)
+  const compactMatch = cleanFilename.match(/\b(20[0-2]\d)(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\b/);
+  if (compactMatch) return `${compactMatch[1]}-${compactMatch[2]}-${compactMatch[3]}`;
+
+  // Pattern 4: DD-MM-YYYY or DD.MM.YYYY or DD/MM/YYYY (European format)
+  const euroMatch = cleanFilename.match(/\b(0[1-9]|[12]\d|3[01])[-./](0[1-9]|1[0-2])[-./](20[0-2]\d)\b/);
+  if (euroMatch) return `${euroMatch[3]}-${euroMatch[2]}-${euroMatch[1]}`;
+
+  // No valid date found - return null instead of garbage
   return null;
 }
 
@@ -824,6 +816,9 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const requestedDocId = searchParams.get("id");
     
+    // NEW: Multi-model pipeline flag (default: true to use new pipeline)
+    const useMultiModel = searchParams.get("multiModel") !== "false";
+    
     let doc: any;
     
     if (requestedDocId) {
@@ -901,6 +896,75 @@ export async function GET(req: Request) {
     const isPDF = doc.filename.match(/\.pdf$/i);
     
     let extractedData: any;
+    let newStatus: "approved" | "needs_review" | "error";
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // NEW MULTI-MODEL PIPELINE (default)
+    // Routes: PDF → Mistral OCR, Excel → Gemini Flash Agentic
+    // Always-on: Haiku Verification
+    // Fallback: Sonnet Reconciliation (if confidence < 0.80)
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (useMultiModel) {
+      console.log(`🚀 Using MULTI-MODEL pipeline for: ${doc.filename}`);
+      
+      const mimeType = isPDF ? "application/pdf" 
+        : isExcel ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        : "application/octet-stream";
+      
+      const result = await processDocument(
+        Buffer.from(arrayBuffer),
+        doc.filename,
+        mimeType,
+        settings
+      );
+      
+      if (!result.success || !result.data) {
+        throw new Error(`Multi-model processing failed: ${result.processingLog.slice(-3).join(" | ")}`);
+      }
+      
+      extractedData = result.data;
+      newStatus = result.status;
+      
+      // Generate AI summary for multi-model results
+      const completeness = extractedData._validation.completeness;
+      const overallConfidence = extractedData._validation.confidence;
+      const rowCount = extractedData.lineItems?.length || 0;
+      const totalWeight = extractedData.weightKg?.value || 0;
+      
+      extractedData.aiSummary = completeness >= 95 && overallConfidence >= 90
+        ? `✓ Dokument med ${rowCount} rader. Total vikt: ${(totalWeight/1000).toFixed(2)} ton. Data komplett (${overallConfidence.toFixed(0)}% säkerhet) - redo för godkännande.`
+        : `⚠️ Dokument med ${rowCount} rader. ${overallConfidence.toFixed(0)}% säkerhet - behöver granskning.`;
+      
+      // Save to database
+      await supabase
+        .from("documents")
+        .update({
+          status: newStatus,
+          extracted_data: extractedData,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", doc.id);
+      
+      console.log(`   Status: ${newStatus}`);
+      console.log(`   Confidence: ${overallConfidence.toFixed(1)}%`);
+      console.log(`   Model Path: ${result.modelPath}`);
+      console.log(`   Items: ${rowCount}\n`);
+
+      return NextResponse.json({ 
+        success: true, 
+        file: doc.filename, 
+        data: extractedData,
+        status: newStatus,
+        modelPath: result.modelPath,
+        validation: extractedData._validation
+      });
+    }
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // LEGACY PIPELINE (multiModel=false)
+    // Keep for backwards compatibility
+    // ═══════════════════════════════════════════════════════════════════════════
+    console.log(`📄 Using LEGACY pipeline for: ${doc.filename}`);
     
     if (isExcel) {
       
@@ -992,7 +1056,7 @@ export async function GET(req: Request) {
     // Determine status based on both completeness and confidence
     // Adaptive extraction provides better confidence scores
     const qualityScore = (completeness + overallConfidence) / 2;
-    const newStatus = qualityScore >= settings.auto_approve_threshold 
+    newStatus = qualityScore >= settings.auto_approve_threshold 
       ? "approved" 
       : "needs_review";
     

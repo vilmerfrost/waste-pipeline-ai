@@ -19,6 +19,11 @@ import { getReviewBreadcrumbs } from "@/lib/breadcrumb-utils";
 import { truncateFilename } from "@/lib/filename-utils";
 import { DeleteDocumentButton } from "@/components/delete-document-button";
 import { ProcessingLogViewer } from "@/components/processing-log-viewer";
+import { ModelBadge } from "@/components/ui/model-badge";
+import { DocumentAssistant } from "@/components/document-assistant";
+import { ProcessingLog } from "@/components/processing-log";
+import { VerificationIssues } from "@/components/verification-issues";
+
 
 export const dynamic = "force-dynamic";
 
@@ -328,9 +333,21 @@ export default async function ReviewPage({
           <h1 className="text-3xl font-bold text-gray-900 mb-2" title={doc.filename}>
             {truncateFilename(doc.filename, 60)}
           </h1>
-          <p className="text-sm text-gray-600">
+          
+          <div className="flex items-center gap-4 mt-2 mb-4">
+            {extractedData?.metadata?.model && (
+              <ModelBadge modelPath={extractedData.metadata.model} />
+            )}
+            <span className="text-sm text-gray-500">
+              Confidence: {((extractedData?.metadata?.confidence || 0) * 100).toFixed(0)}%
+            </span>
+          </div>
+
+          <p className="text-sm text-gray-600 mb-4">
             Granska och godkänn dokument för Collecct AB.
           </p>
+
+          <DocumentAssistant documentId={doc.id} className="max-w-xl" />
         </div>
       </div>
 
@@ -357,10 +374,10 @@ export default async function ReviewPage({
         {/* PROCESSING LOG VIEWER */}
         {extractedData._processingLog && extractedData._processingLog.length > 0 && (
           <div className="mb-6">
-            <ProcessingLogViewer 
-              documentId={doc.id}
-              filename={doc.filename}
-              showStoredLogs={extractedData._processingLog}
+            <ProcessingLog 
+              logs={extractedData._processingLog} 
+              className="mt-4"
+              defaultExpanded={false}
             />
           </div>
         )}
@@ -642,6 +659,15 @@ export default async function ReviewPage({
             <PaginatedTable 
               lineItems={lineItems}
               columns={allColumns}
+            />
+            <VerificationIssues 
+              issues={extractedData?._validation?.issues?.map((issue: string, idx: number) => ({
+                rowIndex: idx,
+                field: "unknown",
+                issue: issue,
+                severity: issue.toLowerCase().includes("error") || issue.includes("KRITISKT") ? "error" : "warning",
+              })) || []}
+              className="mt-4"
             />
           </div>
         )}

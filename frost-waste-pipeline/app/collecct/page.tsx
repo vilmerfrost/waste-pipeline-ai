@@ -1,31 +1,42 @@
 import { createServiceRoleClient } from "@/lib/supabase";
+import React from "react";
 import Link from "next/link";
-import { FileText, CheckCircle2, AlertCircle, Activity, RefreshCw, ArrowLeft, Download, Settings, Home } from "lucide-react";
+import { FileText, Activity, ArrowLeft, Settings, Archive } from "lucide-react";
+import { CollecctMassArchiveWrapper } from "@/components/collecct-mass-archive-wrapper";
 import { AutoFetchButton } from "@/components/auto-fetch-button";
 import { BatchProcessButton } from "@/components/batch-process-button";
-import { GranskaButton } from "@/components/granska-button";
 import { ExportToAzureButton } from "@/components/export-to-azure-button";
 import { Breadcrumbs } from "@/components/breadcrumbs";
 import { getDashboardBreadcrumbs } from "@/lib/breadcrumb-utils";
-import { FilterSection } from "@/components/filter-section";
-import { UndoExportButton } from "@/components/undo-export-button";
-import { formatDate, formatDateTime } from "@/lib/time-utils";
+import { formatDate } from "@/lib/time-utils";
 import { RelativeTime } from "@/components/relative-time";
 import { truncateFilename } from "@/lib/filename-utils";
-import { DeleteDocumentButton } from "@/components/delete-document-button";
 import { Pagination } from "@/components/pagination";
+import { RecentDocuments } from "@/components/recent-documents";
 
 export const dynamic = "force-dynamic";
 
 export default async function CollecctDashboard({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string; page?: string; perPage?: string }>;
+  searchParams: Promise<{ tab?: string; page?: string; perPage?: string; mode?: string }>;
 }) {
   const supabase = createServiceRoleClient();
   const params = await searchParams;
   const activeTab = params.tab || "active";
+  const isMassArchive = params.mode === "mass-archive";
   
+  // Get independent counts for tabs
+  const { count: activeCount } = await supabase
+    .from("documents")
+    .select("*", { count: "exact", head: true })
+    .is("exported_at", null);
+
+  const { count: archivedCount } = await supabase
+    .from("documents")
+    .select("*", { count: "exact", head: true })
+    .not("exported_at", "is", null);
+
   // Pagination params
   const currentPage = Math.max(1, parseInt(params.page || "1", 10));
   const itemsPerPage = Math.min(50, Math.max(10, parseInt(params.perPage || "10", 10)));
@@ -117,14 +128,6 @@ export default async function CollecctDashboard({
     ? exportedDocs.slice(0, 10)
     : documents?.filter(d => d.status !== 'needs_review').slice(0, 10) || [];
 
-  // Calculate quality metrics
-  const avgCompleteness = documents && documents.length > 0
-    ? documents
-        .filter(d => d.extracted_data?._validation?.completeness)
-        .reduce((sum, d) => sum + (d.extracted_data._validation.completeness || 0), 0) / 
-        documents.filter(d => d.extracted_data?._validation?.completeness).length
-    : 0;
-
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header - Clean and Professional */}
@@ -146,6 +149,16 @@ export default async function CollecctDashboard({
 
             {/* Right: Action buttons */}
             <div className="flex items-center gap-3">
+              {activeTab === "active" && (
+                  <Link
+                    href={isMassArchive ? "/collecct" : "/collecct?mode=mass-archive"}
+                    className={`flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-all text-sm font-medium ${isMassArchive ? 'bg-gray-100 ring-2 ring-gray-200' : ''}`}
+                  >
+                    <Archive className="w-4 h-4" />
+                    <span>{isMassArchive ? "Avsluta" : "Mass-arkivera"}</span>
+                  </Link>
+              )}
+
               {activeTab === "active" && approvedDocs.length > 0 && (
                 <ExportToAzureButton 
                   selectedDocuments={approvedDocs.map(d => d.id)}
@@ -201,7 +214,7 @@ export default async function CollecctDashboard({
                   : "text-gray-600 hover:text-gray-900"
               }`}
             >
-              Aktiva ({documents?.filter(d => !d.exported_at).length || 0})
+              Aktiva ({activeCount || 0})
             </a>
             <a
               href="/collecct?tab=archive"
@@ -211,14 +224,24 @@ export default async function CollecctDashboard({
                   : "text-gray-600 hover:text-gray-900"
               }`}
             >
-              Arkiverade ({documents?.filter(d => d.exported_at).length || 0})
+              Arkiverade ({archivedCount || 0})
             </a>
           </div>
         </div>
       </div>
 
-      {/* Stats Cards */}
+      {/* Content */}
       <div className="max-w-7xl mx-auto px-6 py-8">
+        {isMassArchive ? (
+             <CollecctMassArchiveWrapper 
+                documents={documents?.filter(d => !d.exported_at).map(d => ({
+                    id: d.id,
+                    filename: d.filename,
+                    status: d.status
+                })) || []} 
+             />
+        ) : (
+          <div>
         {/* Batch Processing UI */}
         {uploadedDocs.length > 0 && (
           <BatchProcessButton uploadedDocs={uploadedDocs} />
@@ -320,7 +343,7 @@ export default async function CollecctDashboard({
                 const completeness = validation?.completeness || 100;
                 const materialCount = doc.extracted_data?.lineItems?.length || doc.extracted_data?.rows?.length || 0;
                 const totalWeight = doc.extracted_data?.totalWeightKg || 
-                  (doc.extracted_data?.lineItems?.reduce((sum: number, item: any) => 
+                  (doc.extracted_data?.lineItems?.reduce((sum: number, item: { weightKg: number }) => 
                     sum + (item.weightKg || 0), 0) || 0);
 
                 return (
@@ -412,237 +435,13 @@ export default async function CollecctDashboard({
         )}
 
         {/* Senaste Dokument Section */}
-        <div className="mb-8">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-bold text-gray-900">
-              Senaste dokument
-            </h2>
-            <p className="text-sm text-gray-500">
-              Visar {recentDocs.length} av {stats.total} dokument
-            </p>
-          </div>
-
-          {recentDocs.length === 0 ? (
-            <div className="bg-white rounded-lg border-2 border-dashed border-gray-300 p-16 text-center">
-              <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-50 rounded-full mb-4">
-                <FileText className="w-8 h-8 text-blue-600" />
-              </div>
-              <h3 className="text-xl font-semibold text-gray-900 mb-2">
-                {activeTab === "archive" 
-                  ? "Inga arkiverade dokument ännu"
-                  : "Inga dokument ännu"}
-              </h3>
-              <p className="text-gray-600 mb-6">
-                {activeTab === "archive"
-                  ? "Exporterade dokument visas här"
-                  : "Börja med att synka dokument från Azure"}
-              </p>
-              {activeTab === "active" && <AutoFetchButton />}
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {recentDocs.map((doc) => {
-                const validation = doc.extracted_data?._validation;
-                const completeness = validation?.completeness || 100;
-                const isProcessed = doc.status !== 'uploaded';
-                const materialCount = doc.extracted_data?.lineItems?.length || doc.extracted_data?.rows?.length || 0;
-                const totalWeight = doc.extracted_data?.totalWeightKg || 
-                  (doc.extracted_data?.lineItems?.reduce((sum: number, item: any) => 
-                    sum + (item.weightKg || 0), 0) || 0);
-
-                return (
-                  <div
-                    key={doc.id}
-                    className="bg-white rounded-lg border border-gray-200 overflow-hidden hover:shadow-md transition-shadow"
-                  >
-                    {/* Document Header */}
-                    <div className="p-5 border-b border-gray-100">
-                      <div className="flex items-start justify-between gap-3 mb-3">
-                        <div className="flex items-start gap-3 flex-1 min-w-0">
-                          <div className="flex-shrink-0 w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
-                            <FileText className="w-5 h-5 text-gray-600" />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <h3 
-                              className="font-medium text-gray-900 text-sm truncate mb-1"
-                              title={doc.filename}
-                            >
-                              {truncateFilename(doc.filename, 30)}
-                            </h3>
-                            <p className="text-xs text-gray-500" title={formatDate(doc.created_at)}>
-                              <RelativeTime date={doc.created_at} />
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {/* Status Badge */}
-                          <div className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-all ${
-                            doc.status === 'uploaded' ? 'bg-blue-100 text-blue-800' :
-                            doc.status === 'processing' ? 'bg-blue-100 text-blue-800 animate-pulse' :
-                            doc.status === 'needs_review' ? 'bg-yellow-100 text-yellow-800' :
-                            doc.status === 'approved' ? 'bg-green-100 text-green-800' :
-                            doc.status === 'exported' ? 'bg-purple-100 text-purple-800' :
-                            doc.status === 'error' ? 'bg-red-100 text-red-800' :
-                            'bg-gray-100 text-gray-800'
-                          }`}>
-                            {doc.status === 'uploaded' && 'Uppladdad'}
-                            {doc.status === 'processing' && '🔄 Behandlar...'}
-                            {doc.status === 'needs_review' && 'Behöver granskning'}
-                            {doc.status === 'approved' && '✅ Godkänd'}
-                            {doc.status === 'exported' && '📤 Exporterad'}
-                            {doc.status === 'error' && '❌ Fel'}
-                          </div>
-                          {/* Delete Button - only show for non-exported documents */}
-                          {doc.status !== 'exported' && (
-                            <DeleteDocumentButton
-                              documentId={doc.id}
-                              storagePath={doc.storage_path}
-                              filename={doc.filename}
-                              variant="icon"
-                            />
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Document Stats */}
-                    <div className="p-5 space-y-3">
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-600">Material:</span>
-                        <span className="font-medium text-gray-900">
-                          {isProcessed ? `${materialCount} rader` : 'Ej processad'}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-600">Total vikt:</span>
-                        <span className="font-medium text-gray-900">
-                          {isProcessed 
-                            ? (totalWeight > 0 ? `${(totalWeight / 1000).toFixed(1)} ton` : '0 kg')
-                            : '-'
-                          }
-                        </span>
-                      </div>
-                      
-                      {/* Completeness Bar */}
-                      <div>
-                        <div className="flex items-center justify-between text-xs mb-1">
-                          <span className="text-gray-600">Fullständighet:</span>
-                          <span className={`font-medium ${
-                            !isProcessed ? 'text-gray-400' :
-                            completeness >= 95 ? 'text-green-600' :
-                            completeness >= 80 ? 'text-yellow-600' :
-                            'text-red-600'
-                          }`}>
-                            {isProcessed ? `${completeness.toFixed(0)}%` : '-'}
-                          </span>
-                        </div>
-                        <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full transition-all ${
-                              !isProcessed ? 'bg-gray-300' :
-                              completeness >= 95 ? 'bg-green-500' :
-                              completeness >= 80 ? 'bg-yellow-500' :
-                              'bg-red-500'
-                            }`}
-                            style={{ width: isProcessed ? `${completeness}%` : '0%' }}
-                          />
-                        </div>
-                      </div>
-
-                      {/* Validation Warnings */}
-                      {validation && validation.issues && validation.issues.length > 0 && (
-                        <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-                          <div className="flex items-start gap-2">
-                            <AlertCircle className="w-4 h-4 text-yellow-600 flex-shrink-0 mt-0.5" />
-                            <div>
-                              <p className="text-xs font-medium text-yellow-800 mb-1">
-                                Varningar:
-                              </p>
-                              <ul className="text-xs text-yellow-700 space-y-1">
-                                {validation.issues.slice(0, 2).map((issue: string, idx: number) => (
-                                  <li key={idx} className="truncate">• {issue}</li>
-                                ))}
-                              </ul>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Action Button */}
-                    <div className="p-5 pt-0">
-                      {doc.status === 'uploaded' && (
-                        <GranskaButton documentId={doc.id} filename={doc.filename} />
-                      )}
-                      {doc.status === 'processing' && (
-                        <div className="px-4 py-2 bg-gray-100 text-gray-600 rounded-lg font-medium flex items-center justify-center gap-2">
-                          <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                          </svg>
-                          Behandlar...
-                        </div>
-                      )}
-                      {doc.status === 'needs_review' && (
-                        <Link
-                          href={`/review/${doc.id}`}
-                          className="block w-full py-2.5 px-4 bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium rounded-lg transition-colors text-center"
-                        >
-                          Granska nu
-                        </Link>
-                      )}
-                      {doc.status === 'approved' && (
-                        <Link
-                          href={`/review/${doc.id}`}
-                          className="block w-full py-2.5 px-4 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors text-center"
-                        >
-                          Se detaljer
-                        </Link>
-                      )}
-                      {doc.status === 'exported' && (
-                        <div className="space-y-2">
-                          <div className="px-4 py-2 bg-purple-50 border border-purple-200 rounded-lg text-center">
-                            <p className="text-xs text-purple-700 font-medium">📤 Exporterad</p>
-                            {doc.exported_at && (
-                              <p className="text-xs text-purple-600 mt-1" title={formatDateTime(doc.exported_at)}>
-                                <RelativeTime date={doc.exported_at} />
-                              </p>
-                            )}
-                          </div>
-                          <div className="flex gap-2">
-                            {doc.extracted_data?.azure_export_url && (
-                              <a
-                                href={doc.extracted_data.azure_export_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="flex-1 py-2 px-4 bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium rounded-lg transition-colors text-center"
-                              >
-                                Öppna i Azure
-                              </a>
-                            )}
-                            <UndoExportButton 
-                              documentId={doc.id} 
-                              filename={doc.filename}
-                              variant="icon"
-                            />
-                          </div>
-                        </div>
-                      )}
-                      {doc.status === 'error' && (
-                        <Link
-                          href={`/review/${doc.id}`}
-                          className="block w-full py-2.5 px-4 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors text-center"
-                        >
-                          Visa fel
-                        </Link>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+        <RecentDocuments 
+          documents={recentDocs} 
+          total={stats.total} 
+          activeTab={activeTab} 
+        />
         </div>
+        )}
       </div>
     </div>
   );
