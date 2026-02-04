@@ -104,12 +104,15 @@ export async function processDocument(
     // ═══════════════════════════════════════════════════════════════════════
     log.push(`[${timestamp()}] ⚡ Step 2: Primary Extraction...`);
 
+    let sourceText = "";
+    
     if (selectedModel === "mistral-ocr") {
       // PDF → Mistral OCR
       const result = await extractWithMistralOCR(buffer, filename, settings);
       items = result.items as LineItem[];
       confidence = result.confidence;
       language = result.language;
+      sourceText = result.sourceText; // OCR text for verification
       log.push(...result.processingLog);
     } else {
       // Excel → Gemini Flash Agentic
@@ -117,6 +120,7 @@ export async function processDocument(
       items = result.items as LineItem[];
       confidence = result.confidence;
       language = result.language;
+      sourceText = result.sourceText; // Markdown table for verification
       log.push(...result.processingLog);
     }
 
@@ -151,20 +155,10 @@ export async function processDocument(
     log.push(`[${timestamp()}] 🔍 Step 4: Haiku Verification (ALWAYS ON)...`);
     modelPath += " → haiku-verification";
 
-    // Get original content for verification reference
-    let originalContent = "";
-    if (filename.toLowerCase().endsWith(".pdf")) {
-      originalContent = `[PDF content - see original file: ${filename}]`;
-    } else {
-      // Convert Excel to TSV for reference
-      const workbook = XLSX.read(buffer);
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      originalContent = XLSX.utils.sheet_to_csv(sheet, { FS: "\t" });
-    }
-
+    // Use sourceText from extraction (OCR text for PDF, markdown table for Excel)
     const verification = await verifyWithHaiku(
       items as VerificationLineItem[], 
-      originalContent, 
+      sourceText, 
       filename, 
       log
     );

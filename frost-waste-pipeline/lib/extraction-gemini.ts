@@ -21,6 +21,7 @@ interface GeminiExtractionResult {
   confidence: number;
   language: string;
   processingLog: string[];
+  sourceText: string; // Markdown table for verification
 }
 
 export async function extractWithGeminiAgentic(
@@ -221,11 +222,19 @@ CRITICAL: Extract ALL ${dataRows.length} rows!`;
   log.push(`[${timestamp()}] ✅ Extracted ${items.length} / ${dataRows.length} rows`);
   log.push(`[${timestamp()}] 📊 Confidence: ${((extractedJson.confidence || 0.85) * 100).toFixed(0)}%`);
 
+  // Build full content for verification (include all rows, not just sample)
+  let fullMarkdownTable = "| " + headerRow.map((h: any) => String(h || "").substring(0, 50)).join(" | ") + " |\n";
+  fullMarkdownTable += "| " + headerRow.map(() => "---").join(" | ") + " |\n";
+  for (const row of dataRows) {
+    fullMarkdownTable += "| " + row.map((c: any) => String(c || "").substring(0, 50)).join(" | ") + " |\n";
+  }
+
   return {
     items,
     confidence: extractedJson.confidence || 0.85,
     language: analysisJson.analysis?.language || "Swedish",
     processingLog: log,
+    sourceText: fullMarkdownTable, // Return full table for verification
   };
 }
 
