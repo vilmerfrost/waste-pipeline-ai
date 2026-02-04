@@ -20,6 +20,7 @@ interface MistralExtractionResult {
   confidence: number;
   language: string;
   processingLog: string[];
+  sourceText: string; // OCR text for verification
 }
 
 export async function extractWithMistralOCR(
@@ -189,6 +190,7 @@ OUTPUT FORMAT (JSON only, no markdown, no backticks)
       confidence: extracted.confidence || 0.85,
       language: extracted.language || "Swedish",
       processingLog: log,
+      sourceText: ocrText, // Return OCR text for verification
     };
   } catch (error: any) {
     log.push(`[${timestamp()}] ❌ Mistral extraction failed: ${error.message}`);

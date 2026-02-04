@@ -43,6 +43,7 @@ export interface ExtractionResult {
   confidence: number;
   language: string;
   processingLog: string[];
+  sourceText: string; // Original content for verification
 }
 
 /**

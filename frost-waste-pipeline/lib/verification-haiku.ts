@@ -34,7 +34,7 @@ export interface VerificationIssue {
 
 export async function verifyWithHaiku(
   items: LineItem[],
-  originalContent: string, // TSV or text representation
+  originalContent: string,
   filename: string,
   previousLog: string[]
 ): Promise<VerificationResult> {
@@ -43,7 +43,6 @@ export async function verifyWithHaiku(
   
   log.push(`[${timestamp()}] 🔍 HAIKU VERIFICATION: Starting (ALWAYS ON)`);
 
-  // Verify in chunks if many items
   const VERIFY_CHUNK_SIZE = 25;
   const allIssues: VerificationIssue[] = [];
   let totalConfidence = 0;
@@ -54,7 +53,7 @@ export async function verifyWithHaiku(
     const chunkNum = Math.floor(i / VERIFY_CHUNK_SIZE) + 1;
     const totalChunks = Math.ceil(items.length / VERIFY_CHUNK_SIZE);
 
-    const prompt = `You are a data verification agent. Check if extracted data is valid and realistic.
+    const prompt = `You are a strict data verification agent. Your job is to detect hallucinations and fabricated data.
 
 FILENAME: ${filename}
 
@@ -65,21 +64,31 @@ EXTRACTED DATA TO VERIFY (chunk ${chunkNum}/${totalChunks}, rows ${i + 1}-${i + 
 ${JSON.stringify(chunk, null, 2)}
 
 ═══════════════════════════════════════════════════════════════════════════════
-VERIFICATION CHECKS
+VERIFICATION CHECKS - BE STRICT
 ═══════════════════════════════════════════════════════════════════════════════
 
-For EACH row, verify these fields exist in the source:
-1. DATE - Does this date (or similar format) appear in source?
-2. LOCATION - Does this address/location text appear?
-3. MATERIAL - Does this material name (or synonym) appear?
-4. WEIGHT - Does this weight value appear? Watch for unit conversion errors (500 kg vs 5000 kg)
-5. RECEIVER - Does this appear, or was it likely inferred from filename?
+For EACH row, verify these fields against the source:
 
-⚠️ HALLUCINATION PATTERNS TO DETECT:
-- Made-up addresses that don't exist in source
-- Wrong weight magnitude (10x errors: 185 vs 1850)
-- Dates from wrong rows
-- Materials that don't appear anywhere in source
+1. DATE - Does this exact date (or recognizable format) appear in source?
+2. LOCATION/ADDRESS - Does this address text appear verbatim in source?
+3. MATERIAL - Does this material name (or clear synonym) appear in source?
+4. WEIGHT - Does this weight value appear? Watch for unit conversion errors (500 kg vs 5000 kg, decimal errors)
+5. RECEIVER - Does this company/organization name appear VERBATIM in source text? 
+   ⚠️ If the receiver name cannot be found anywhere in the source document, mark as ERROR.
+   ⚠️ Do NOT accept receiver names inferred from filename, context, or assumed from industry knowledge.
+
+═══════════════════════════════════════════════════════════════════════════════
+HALLUCINATION PATTERNS - FLAG AS ERROR
+═══════════════════════════════════════════════════════════════════════════════
+
+- Company/organization names (especially receiver) that don't appear VERBATIM in source → ERROR
+- Made-up addresses that don't exist in source → ERROR
+- Wrong weight magnitude (10x errors: 185 vs 1850, decimal shifts) → ERROR
+- Dates from wrong rows or not in source → ERROR
+- Materials that don't appear anywhere in source → ERROR
+- Any value that looks "reasonable" but isn't actually in the document → ERROR
+
+CRITICAL: If a field value cannot be traced to specific text in the source, it is a hallucination.
 
 Return JSON (no markdown):
 {
@@ -87,9 +96,9 @@ Return JSON (no markdown):
     {
       "rowIndex": number (0-indexed within this chunk, add ${i} for global index),
       "field": "date|weightKg|material|address|receiver",
-      "issue": "description",
+      "issue": "description of what's wrong",
       "severity": "warning|error",
-      "suggestion": "how to fix (optional)"
+      "suggestion": "leave empty or set to null if value should be removed"
     }
   ],
   "confidence": 0.0-1.0 (for this chunk)
@@ -109,7 +118,6 @@ If no issues found, return: {"issues": [], "confidence": 0.95}`;
       const jsonMatch = responseText.match(/\{[\s\S]*\}/);
       const result = JSON.parse(jsonMatch?.[0] || '{"issues":[],"confidence":0.9}');
 
-      // Adjust row indices to global
       const adjustedIssues = (result.issues || []).map((issue: any) => ({
         ...issue,
         rowIndex: issue.rowIndex + i,
@@ -121,7 +129,7 @@ If no issues found, return: {"issues": [], "confidence": 0.95}`;
 
     } catch (error: any) {
       log.push(`[${timestamp()}] ⚠️ Verification chunk ${chunkNum} failed: ${error.message}`);
-      totalConfidence += 0.8; // Assume 80% if verification fails
+      totalConfidence += 0.8;
       chunksProcessed++;
     }
   }
@@ -130,7 +138,6 @@ If no issues found, return: {"issues": [], "confidence": 0.95}`;
   const errorCount = allIssues.filter(i => i.severity === "error").length;
   const warningCount = allIssues.filter(i => i.severity === "warning").length;
   
-  // Pass if no errors and confidence > 70%
   const passed = errorCount === 0 && avgConfidence >= 0.7;
 
   log.push(`[${timestamp()}] ✅ Verification complete`);
@@ -138,7 +145,6 @@ If no issues found, return: {"issues": [], "confidence": 0.95}`;
   log.push(`[${timestamp()}] ❌ Errors: ${errorCount}, ⚠️ Warnings: ${warningCount}`);
   log.push(`[${timestamp()}] ${passed ? "✅ PASSED" : "🚨 FLAGGED FOR REVIEW"}`);
 
-  // Add issue flags to items
   const flaggedItems = items.map((item, idx) => {
     const itemIssues = allIssues.filter(i => i.rowIndex === idx);
     if (itemIssues.length > 0) {
