@@ -30,7 +30,20 @@ export function formatDateTime(dateString: string): string {
  * Format relative time (e.g., "2 timmar sedan", "igår")
  */
 export function formatRelativeTime(dateString: string): string {
-  const date = new Date(dateString);
+  // Parse date - hantera både med och utan timezone
+  let date: Date;
+  if (dateString.includes('Z') || dateString.includes('+') || dateString.match(/\d{2}:\d{2}:\d{2}\.\d+[+-]/)) {
+    date = new Date(dateString);
+  } else {
+    // Supabase returnerar ofta utan timezone - anta UTC
+    date = new Date(dateString + 'Z');
+  }
+  
+  // Validate
+  if (isNaN(date.getTime())) {
+    return dateString; // Fallback om parsing misslyckas
+  }
+  
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffSeconds = Math.floor(diffMs / 1000);

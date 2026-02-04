@@ -42,7 +42,11 @@ export function SmartInput({ label, fieldData, description, className, onChange,
     );
   }
 
-  if (fieldData?.value === undefined || fieldData?.value === null || fieldData?.value === "") {
+  // Dölj confidence badge om värdet saknas ELLER om värdet är 0 (0 är ofta korrekt för CO2)
+  const valueIsMissing = fieldData?.value === undefined || fieldData?.value === null || fieldData?.value === "";
+  const valueIsZero = fieldData?.value === 0 || fieldData?.value === "0";
+
+  if (valueIsMissing || valueIsZero) {
       confidenceBadge = null;
       statusColor = "bg-white border-slate-200";
   }

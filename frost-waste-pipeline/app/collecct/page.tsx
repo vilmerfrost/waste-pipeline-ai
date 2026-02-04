@@ -45,7 +45,7 @@ export default async function CollecctDashboard({
   let documentsQuery = supabase
     .from("documents")
     .select("*")
-    .order("created_at", { ascending: false });
+    .order("updated_at", { ascending: false });
 
   // Filter: Active tab shows non-exported, Archive tab shows exported
   if (activeTab === "archive") {
@@ -54,7 +54,28 @@ export default async function CollecctDashboard({
     documentsQuery = documentsQuery.is("exported_at", null);
   }
 
-  const { data: documents } = await documentsQuery;
+  const { data: documents, error } = await documentsQuery;
+
+  // DEBUG: Log raw Supabase response
+  if (documents && documents.length > 0) {
+    console.log('=== SUPABASE RAW RESPONSE (first 3 docs) ===');
+    documents.slice(0, 3).forEach((doc: any, idx: number) => {
+      console.log(`Doc ${idx + 1}:`, {
+        id: doc.id,
+        filename: doc.filename,
+        created_at: doc.created_at,
+        created_at_type: typeof doc.created_at,
+        updated_at: doc.updated_at,
+        updated_at_type: typeof doc.updated_at,
+        created_at_raw: JSON.stringify(doc.created_at),
+        updated_at_raw: JSON.stringify(doc.updated_at),
+      });
+    });
+    console.log('=== END SUPABASE RAW RESPONSE ===');
+  }
+  if (error) {
+    console.error('Supabase query error:', error);
+  }
 
   // Fetch paginated needs_review documents separately (only for active tab)
   let needsReviewDocs: any[] = [];
@@ -83,7 +104,7 @@ export default async function CollecctDashboard({
       .from("documents")
       .select("*")
       .eq("status", "needs_review")
-      .order("created_at", { ascending: true })
+      .order("updated_at", { ascending: true })
       .range(startIndex, endIndex);
     
     needsReviewDocs = paginatedNeedsReview || [];
@@ -340,11 +361,18 @@ export default async function CollecctDashboard({
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {needsReviewDocs.map((doc) => {
                 const validation = doc.extracted_data?._validation;
-                const completeness = validation?.completeness || 100;
+                const completeness = validation?.completeness ?? null;
                 const materialCount = doc.extracted_data?.lineItems?.length || doc.extracted_data?.rows?.length || 0;
-                const totalWeight = doc.extracted_data?.totalWeightKg || 
-                  (doc.extracted_data?.lineItems?.reduce((sum: number, item: { weightKg: number }) => 
-                    sum + (item.weightKg || 0), 0) || 0);
+                
+                // Helper to extract numeric value from {value, confidence} or plain number
+                const getNumericValue = (val: any): number => {
+                  if (typeof val === 'object' && val?.value !== undefined) return Number(val.value) || 0;
+                  return Number(val) || 0;
+                };
+
+                const totalWeight = getNumericValue(doc.extracted_data?.totalWeightKg) || 
+                  (doc.extracted_data?.lineItems?.reduce((sum: number, item: any) => 
+                    sum + getNumericValue(item.weightKg), 0) || 0);
 
                 return (
                   <div
@@ -363,8 +391,8 @@ export default async function CollecctDashboard({
                           >
                             {truncateFilename(doc.filename, 30)}
                           </h3>
-                          <p className="text-xs text-gray-500" title={formatDate(doc.created_at)}>
-                            <RelativeTime date={doc.created_at} />
+<p className="text-xs text-gray-500" title={formatDate(doc.updated_at)}>
+                          <RelativeTime date={doc.updated_at} />
                           </p>
                         </div>
                       </div>
@@ -383,26 +411,35 @@ export default async function CollecctDashboard({
                       </div>
                       
                       <div>
-                        <div className="flex items-center justify-between text-xs mb-1">
-                          <span className="text-gray-600">Fullständighet:</span>
-                          <span className={`font-medium ${
-                            completeness >= 95 ? 'text-green-600' :
-                            completeness >= 80 ? 'text-yellow-600' :
-                            'text-red-600'
-                          }`}>
-                            {completeness.toFixed(0)}%
-                          </span>
-                        </div>
-                        <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full transition-all ${
-                              completeness >= 95 ? 'bg-green-500' :
-                              completeness >= 80 ? 'bg-yellow-500' :
-                              'bg-red-500'
-                            }`}
-                            style={{ width: `${Math.min(completeness, 100)}%` }}
-                          />
-                        </div>
+                        {completeness !== null ? (
+                          <>
+                            <div className="flex items-center justify-between text-xs mb-1">
+                              <span className="text-gray-600">Fullständighet:</span>
+                              <span className={`font-medium ${
+                                completeness >= 95 ? 'text-green-600' :
+                                completeness >= 80 ? 'text-yellow-600' :
+                                'text-red-600'
+                              }`}>
+                                {completeness.toFixed(0)}%
+                              </span>
+                            </div>
+                            <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full transition-all ${
+                                  completeness >= 95 ? 'bg-green-500' :
+                                  completeness >= 80 ? 'bg-yellow-500' :
+                                  'bg-red-500'
+                                }`}
+                                style={{ width: `${Math.min(completeness, 100)}%` }}
+                              />
+                            </div>
+                          </>
+                        ) : (
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-gray-600">Fullständighet:</span>
+                            <span className="text-gray-400">-</span>
+                          </div>
+                        )}
                       </div>
                     </div>
 

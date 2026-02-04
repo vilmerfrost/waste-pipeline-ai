@@ -23,6 +23,7 @@ import { ModelBadge } from "@/components/ui/model-badge";
 import { DocumentAssistant } from "@/components/document-assistant";
 import { ProcessingLog } from "@/components/processing-log";
 import { VerificationIssues } from "@/components/verification-issues";
+import { Collapsible } from "@/components/collapsible";
 
 
 export const dynamic = "force-dynamic";
@@ -330,9 +331,20 @@ export default async function ReviewPage({
             </span>
           </div>
 
-          <h1 className="text-3xl font-bold text-gray-900 mb-2" title={doc.filename}>
+          <h1 className="text-3xl font-bold text-gray-900 mb-1" title={doc.filename}>
             {truncateFilename(doc.filename, 60)}
           </h1>
+          {/* Compact Document Metadata - right under filename */}
+          {extractedData.documentMetadata && (
+            <p className="text-sm text-gray-500 mb-2">
+              {[
+                extractedData.documentMetadata.date,
+                extractedData.documentMetadata.supplier,
+                extractedData.documentMetadata.address,
+                extractedData.documentMetadata.receiver
+              ].filter(Boolean).join(' • ')}
+            </p>
+          )}
           
           <div className="flex items-center gap-4 mt-2 mb-4">
             {extractedData?.metadata?.model && (
@@ -342,10 +354,6 @@ export default async function ReviewPage({
               Confidence: {((extractedData?.metadata?.confidence || 0) * 100).toFixed(0)}%
             </span>
           </div>
-
-          <p className="text-sm text-gray-600 mb-4">
-            Granska och godkänn dokument för Collecct AB.
-          </p>
 
           <DocumentAssistant documentId={doc.id} className="max-w-xl" />
         </div>
@@ -382,50 +390,6 @@ export default async function ReviewPage({
           </div>
         )}
 
-        {/* DOCUMENT METADATA */}
-        {extractedData.documentMetadata && (
-          <div className="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-6">
-            <h2 className="text-lg font-semibold text-blue-900 mb-4 flex items-center gap-2">
-              <FileText className="w-5 h-5" />
-              Dokumentinformation
-            </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              {extractedData.documentMetadata.date && (
-                <div>
-                  <label className="text-sm font-medium text-blue-700 block mb-1">Datum</label>
-                  <div className="text-gray-900 font-medium">
-                    {extractedData.documentMetadata.date}
-                  </div>
-                </div>
-              )}
-              {extractedData.documentMetadata.supplier && (
-                <div>
-                  <label className="text-sm font-medium text-blue-700 block mb-1">Leverantör</label>
-                  <div className="text-gray-900 font-medium">
-                    {extractedData.documentMetadata.supplier}
-                  </div>
-                </div>
-              )}
-              {extractedData.documentMetadata.address && (
-                <div>
-                  <label className="text-sm font-medium text-blue-700 block mb-1">Projektadress</label>
-                  <div className="text-gray-900 font-medium">
-                    {extractedData.documentMetadata.address}
-                  </div>
-                </div>
-              )}
-              {extractedData.documentMetadata.receiver && (
-                <div>
-                  <label className="text-sm font-medium text-blue-700 block mb-1">Mottagare</label>
-                  <div className="text-gray-900 font-medium">
-                    {extractedData.documentMetadata.receiver}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
         {/* DOCUMENT STATS */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
           <div className="bg-white rounded-lg border border-gray-200 p-4">
@@ -449,94 +413,91 @@ export default async function ReviewPage({
           </div>
         </div>
 
-        {/* COLUMN LEGEND */}
-        <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-            <div>
-              <h3 className="font-semibold text-blue-900 mb-2">
-                Kolumner ({allColumns.length})
-              </h3>
-              <div className="flex flex-wrap gap-2">
-                {mandatory.map(col => (
-                  <span 
-                    key={col}
-                    className="px-3 py-1 bg-blue-600 text-white text-sm rounded-full font-medium"
-                    title="Obligatorisk kolumn"
-                  >
-                    {col === "date" ? "Datum" : 
-                     col === "address" ? "Adress" :
-                     col === "material" ? "Material" :
-                     col === "weightKg" ? "Vikt" :
-                     col === "unit" ? "Enhet" :
-                     col === "receiver" ? "Mottagare" : col}
-                  </span>
-                ))}
-                {optional.map(col => (
-                  <span 
-                    key={col}
-                    className="px-3 py-1 bg-purple-100 border border-purple-300 text-purple-700 text-sm rounded-full"
-                    title="Valfri kolumn (hittades i data)"
-                  >
-                    {col === "cost" || col === "costSEK" ? "Kostnad" :
-                     col === "co2Saved" || col === "co2" ? "CO2" :
-                     col === "wasteCode" || col === "avfallskod" ? "Avfallskod" :
-                     col === "referensnummer" ? "Referensnummer" :
-                     col === "fordon" ? "Fordon" :
-                     col === "container" ? "Container" :
-                     col === "handling" ? "Hantering" :
-                     col === "isHazardous" ? "Farligt Avfall" :
-                     col === "percentage" ? "Procent" :
-                     col === "notes" ? "Anteckningar" :
-                     col === "quantity" ? "Antal" : col} +
-                  </span>
-                ))}
-              </div>
-              
-              {/* Show which optional columns were NOT found */}
-              {["wasteCode", "costSEK", "co2Saved", "notes"].filter(f => !optional.includes(f) && !optional.includes("cost") && !optional.includes("co2")).length > 0 && (
-                <div className="mt-3 text-xs text-gray-600">
-                  Saknas i detta dokument: {
-                    ["wasteCode", "costSEK", "co2Saved", "notes"]
-                      .filter(f => !optional.includes(f) && !optional.includes("cost") && !optional.includes("co2"))
-                      .map(f => f === "wasteCode" ? "Avfallskod" : f === "costSEK" ? "Kostnad" : f === "co2Saved" ? "CO2" : f === "notes" ? "Anteckningar" : f)
-                      .join(", ")
-                  }
+        {/* COLUMN LEGEND - Collapsed by default */}
+        <Collapsible title={`Kolumner (${allColumns.length})`} className="mb-6">
+          <div className="pt-4">
+            <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+              <div>
+                <div className="flex flex-wrap gap-2">
+                  {mandatory.map(col => (
+                    <span 
+                      key={col}
+                      className="px-3 py-1 bg-blue-600 text-white text-sm rounded-full font-medium"
+                      title="Obligatorisk kolumn"
+                    >
+                      {col === "date" ? "Datum" : 
+                       col === "address" ? "Adress" :
+                       col === "material" ? "Material" :
+                       col === "weightKg" ? "Vikt" :
+                       col === "unit" ? "Enhet" :
+                       col === "receiver" ? "Mottagare" : col}
+                    </span>
+                  ))}
+                  {optional.map(col => (
+                    <span 
+                      key={col}
+                      className="px-3 py-1 bg-purple-100 border border-purple-300 text-purple-700 text-sm rounded-full"
+                      title="Valfri kolumn (hittades i data)"
+                    >
+                      {col === "cost" || col === "costSEK" ? "Kostnad" :
+                       col === "co2Saved" || col === "co2" ? "CO2" :
+                       col === "wasteCode" || col === "avfallskod" ? "Avfallskod" :
+                       col === "referensnummer" ? "Referensnummer" :
+                       col === "fordon" ? "Fordon" :
+                       col === "container" ? "Container" :
+                       col === "handling" ? "Hantering" :
+                       col === "isHazardous" ? "Farligt Avfall" :
+                       col === "percentage" ? "Procent" :
+                       col === "notes" ? "Anteckningar" :
+                       col === "quantity" ? "Antal" : col} +
+                    </span>
+                  ))}
                 </div>
-              )}
-            </div>
-            <div className="text-xs text-blue-700 lg:ml-4">
-              <div className="font-semibold mb-1">Legend:</div>
-              <div className="flex items-center gap-2 mb-1">
-                <span className="inline-block w-3 h-3 bg-blue-600 rounded-full"></span>
-                <span>Obligatorisk</span>
+                
+                {["wasteCode", "costSEK", "co2Saved", "notes"].filter(f => !optional.includes(f) && !optional.includes("cost") && !optional.includes("co2")).length > 0 && (
+                  <div className="mt-3 text-xs text-gray-600">
+                    Saknas i detta dokument: {
+                      ["wasteCode", "costSEK", "co2Saved", "notes"]
+                        .filter(f => !optional.includes(f) && !optional.includes("cost") && !optional.includes("co2"))
+                        .map(f => f === "wasteCode" ? "Avfallskod" : f === "costSEK" ? "Kostnad" : f === "co2Saved" ? "CO2" : f === "notes" ? "Anteckningar" : f)
+                        .join(", ")
+                    }
+                  </div>
+                )}
               </div>
-              <div className="flex items-center gap-2">
-                <span className="inline-block w-3 h-3 bg-purple-100 border border-purple-300 rounded-full"></span>
-                <span>Valfri</span>
+              <div className="text-xs text-gray-600 lg:ml-4">
+                <div className="font-semibold mb-1">Legend:</div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="inline-block w-3 h-3 bg-blue-600 rounded-full"></span>
+                  <span>Obligatorisk</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="inline-block w-3 h-3 bg-purple-100 border border-purple-300 rounded-full"></span>
+                  <span>Valfri</span>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        </Collapsible>
 
-        {/* PRIMARY KEY INFO */}
-        <div className="mb-6 p-4 bg-gray-50 border border-gray-200 rounded-lg">
-          <h3 className="font-semibold text-gray-900 mb-2">
-            Primärnyckel
-          </h3>
-          <p className="text-sm text-gray-700 mb-3">
-            Varje unik kombination av <strong>Adress + Mottagare + Material + Datum</strong> är en rad.
-          </p>
-          <div className="text-xs text-gray-600 space-y-1">
-            <div>• Samma material till olika mottagare = olika rader</div>
-            <div>• Samma adress med olika material = olika rader</div>
-            <div>• Samma allt = EN rad (duplicerad primärnyckel - VARNING!)</div>
-          </div>
-          {duplicateKeys.length > 0 && (
-            <div className="mt-3 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
-              <strong>Varning:</strong> {duplicateKeys.length} duplicerade primärnycklar hittades (rad {duplicateKeys.map(d => d.indices.join(", ")).join(", ")})
+        {/* PRIMARY KEY INFO - Collapsed by default */}
+        <Collapsible title="Primärnyckel-info" className="mb-6">
+          <div className="pt-4">
+            <p className="text-sm text-gray-700 mb-3">
+              Varje unik kombination av <strong>Adress + Mottagare + Material + Datum</strong> är en rad.
+            </p>
+            <div className="text-xs text-gray-600 space-y-1">
+              <div>• Samma material till olika mottagare = olika rader</div>
+              <div>• Samma adress med olika material = olika rader</div>
+              <div>• Samma allt = EN rad (duplicerad primärnyckel - VARNING!)</div>
             </div>
-          )}
-        </div>
+            {duplicateKeys.length > 0 && (
+              <div className="mt-3 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
+                <strong>Varning:</strong> {duplicateKeys.length} duplicerade primärnycklar hittades (rad {duplicateKeys.map(d => d.indices.join(", ")).join(", ")})
+              </div>
+            )}
+          </div>
+        </Collapsible>
 
         {/* Left: Document Preview */}
         <div className="mb-6">
@@ -644,32 +605,28 @@ export default async function ReviewPage({
           </div>
         )}
 
-        {/* RAW EXTRACTED DATA TABLE */}
+        {/* RAW EXTRACTED DATA TABLE - Collapsed by default */}
         {lineItems.length > 0 && (
-          <div className="mb-6">
-            <div className="flex items-center gap-3 mb-4">
-              <h2 className="text-xl font-semibold text-gray-900">Extraherad Data (Rådata från AI)</h2>
-              <span className="px-3 py-1 bg-gray-100 text-gray-600 text-sm rounded-full">
-                {lineItems.length} rader extraherade
-              </span>
+          <Collapsible title={`Rådata från AI (${lineItems.length} rader)`} className="mb-6">
+            <div className="pt-4">
+              <p className="text-sm text-gray-500 mb-4">
+                Rå data som AI:n extraherade. Fält med "SAKNAS" fylls i med fallback-värden vid export.
+              </p>
+              <PaginatedTable 
+                lineItems={lineItems}
+                columns={allColumns}
+              />
+              <VerificationIssues 
+                issues={extractedData?._validation?.issues?.map((issue: string, idx: number) => ({
+                  rowIndex: idx,
+                  field: "unknown",
+                  issue: issue,
+                  severity: issue.toLowerCase().includes("error") || issue.includes("KRITISKT") ? "error" : "warning",
+                })) || []}
+                className="mt-4"
+              />
             </div>
-            <p className="text-sm text-gray-500 mb-4">
-              Rå data som AI:n extraherade. Fält med "SAKNAS" fylls i med fallback-värden vid export.
-            </p>
-            <PaginatedTable 
-              lineItems={lineItems}
-              columns={allColumns}
-            />
-            <VerificationIssues 
-              issues={extractedData?._validation?.issues?.map((issue: string, idx: number) => ({
-                rowIndex: idx,
-                field: "unknown",
-                issue: issue,
-                severity: issue.toLowerCase().includes("error") || issue.includes("KRITISKT") ? "error" : "warning",
-              })) || []}
-              className="mt-4"
-            />
-          </div>
+          </Collapsible>
         )}
 
         {/* Right: Review Form */}

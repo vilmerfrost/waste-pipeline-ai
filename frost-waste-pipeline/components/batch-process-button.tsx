@@ -289,7 +289,7 @@ export function BatchProcessButton({ uploadedDocs, onSuccess }: BatchProcessButt
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="text-[10px] text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">
-                          {(doc.size / 1024).toFixed(0)} KB
+                          {doc.size ? `${(doc.size / 1024).toFixed(0)} KB` : '-'}
                         </span>
                       </div>
                     </div>

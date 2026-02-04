@@ -100,17 +100,23 @@ export function RecentDocuments({ documents, total, activeTab }: RecentDocuments
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {filteredDocs.map((doc) => {
             const validation = doc.extracted_data?._validation;
-            const completeness = validation?.completeness || 100;
+            const completeness = validation?.completeness ?? null;
             const isProcessed = doc.status !== "uploaded";
             const materialCount =
               doc.extracted_data?.lineItems?.length || doc.extracted_data?.rows?.length || 0;
+            
+            // Helper to extract numeric value from {value, confidence} or plain number
+            const getNumericValue = (val: any): number => {
+              if (typeof val === 'object' && val?.value !== undefined) return Number(val.value) || 0;
+              return Number(val) || 0;
+            };
+
             const totalWeight =
-              doc.extracted_data?.totalWeightKg ||
+              getNumericValue(doc.extracted_data?.totalWeightKg) ||
               (doc.extracted_data?.lineItems?.reduce(
-                (sum: number, item: any) => sum + (item.weightKg || 0),
+                (sum: number, item: any) => sum + getNumericValue(item.weightKg),
                 0
-              ) ||
-                0);
+              ) || 0);
             
             const isPdf = doc.filename.toLowerCase().endsWith(".pdf");
 
@@ -138,11 +144,11 @@ export function RecentDocuments({ documents, total, activeTab }: RecentDocuments
                           {truncateFilename(doc.filename, 35)}
                         </h3>
                         <div className="flex items-center gap-2 text-xs text-gray-500">
-                          <span title={formatDate(doc.created_at)}>
-                            <RelativeTime date={doc.created_at} />
+                          <span title={formatDate(doc.updated_at)}>
+                            <RelativeTime date={doc.updated_at} />
                           </span>
                           <span>•</span>
-                          <span>{(doc.size / 1024).toFixed(0)} KB</span>
+                          <span>{doc.size ? `${(doc.size / 1024).toFixed(0)} KB` : '-'}</span>
                         </div>
                       </div>
                     </div>
@@ -188,8 +194,8 @@ export function RecentDocuments({ documents, total, activeTab }: RecentDocuments
                     </div>
                   </div>
 
-                  {/* Completeness Bar - only if processed */}
-                  {isProcessed && (
+                  {/* Completeness Bar - only if processed and has completeness data */}
+                  {isProcessed && completeness !== null && (
                     <div>
                       <div className="flex items-center justify-between text-xs mb-1.5">
                         <span className="text-gray-500 font-medium">Datakvalitet</span>
