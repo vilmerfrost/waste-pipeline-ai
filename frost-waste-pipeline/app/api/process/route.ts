@@ -1,9 +1,9 @@
 import { createServiceRoleClient } from "@/lib/supabase";
 import { NextResponse } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
 import * as XLSX from "xlsx";
 import { extractAdaptive } from "@/lib/adaptive-extraction";
 import { processDocument } from "@/lib/document-processor";
+import { getAnthropic } from "@/lib/ai-clients";
 
 // ============================================================================
 // DATE EXTRACTION HELPERS
@@ -147,9 +147,6 @@ function validateAndFixDate(extractedDate: string | null, filenameDate: string |
   return extracted;
 }
 
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY!,
-});
 
 // ============================================================================
 // SETTINGS
@@ -290,7 +287,7 @@ Extract ALL ${chunkRows.length} rows from this chunk!`;
         
         console.log(`   🔄 Attempt ${attempt + 1}/2: Using ${model === "claude-haiku-4-5-20251001" ? "Haiku" : "Sonnet"}`);
         
-        const response = await anthropic.messages.create({
+        const response = await getAnthropic().messages.create({
           model: model as any,
           max_tokens: attempt === 0 ? 8192 : 16384, // More tokens for Sonnet
           messages: [{ role: "user", content: prompt }]
@@ -582,7 +579,7 @@ Extract ALL material rows from the table. Return JSON only!`;
 
   try {
     log(`📤 Calling Claude Sonnet for PDF OCR...`, 'info');
-    const response = await anthropic.messages.create({
+    const response = await getAnthropic().messages.create({
       model: "claude-sonnet-4-5-20250929", // Use Sonnet for better PDF OCR quality
       max_tokens: 16384,
       messages: [

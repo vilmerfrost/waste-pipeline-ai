@@ -2,11 +2,7 @@
 // Handles chaotic documents with real confidence scores
 // Includes optional verification step to detect hallucinations
 
-import Anthropic from "@anthropic-ai/sdk";
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY!,
-});
+import { getAnthropic } from "./ai-clients";
 
 // ============================================================================
 // KNOWN ATTRIBUTE SYNONYMS (Swedish reference - LLM translates on-the-fly)
@@ -182,7 +178,7 @@ JSON OUTPUT (no markdown, no backticks):
 }`;
 
   try {
-    const response = await anthropic.messages.create({
+    const response = await getAnthropic().messages.create({
       model: "claude-sonnet-4-5-20250929",
       max_tokens: 2048,
       temperature: 0,
@@ -374,7 +370,7 @@ CRITICAL:
   console.log(`   🔄 Attempt 1: Using Haiku`);
   
   try {
-    const haikuResponse = await anthropic.messages.create({
+    const haikuResponse = await getAnthropic().messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: maxTokens,
       temperature: 0,
@@ -452,7 +448,7 @@ CRITICAL:
   console.log(`   🔄 Attempt 2: Falling back to Sonnet`);
   
   try {
-    const sonnetResponse = await anthropic.messages.create({
+    const sonnetResponse = await getAnthropic().messages.create({
       model: "claude-sonnet-4-5-20250929",
       max_tokens: maxTokens,
       temperature: 0,

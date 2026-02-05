@@ -1,7 +1,7 @@
 // Document Assistant using Claude Haiku
 // Post-extraction assistant for answering questions about processed documents
 
-import { anthropic } from "./ai-clients";
+import { getAnthropic } from "./ai-clients";
 
 interface AssistantResponse {
   answer: string;
@@ -38,7 +38,7 @@ If something went wrong, explain clearly what and why.
 Suggest fixes if applicable.`;
 
   try {
-    const response = await anthropic.messages.create({
+    const response = await getAnthropic().messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 2048,
       temperature: 0.7,

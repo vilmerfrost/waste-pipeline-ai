@@ -1,7 +1,7 @@
 // Mistral OCR 3 Extraction for PDF Documents
 // Uses Mistral's OCR endpoint for text extraction, then structures with chat
 
-import { mistral } from "./ai-clients";
+import { getMistral } from "./ai-clients";
 
 export interface LineItem {
   date: { value: string; confidence: number };
@@ -51,7 +51,7 @@ export async function extractWithMistralOCR(
     // ═══════════════════════════════════════════════════════════════════════
     log.push(`[${timestamp()}] 📤 Step 1: Running Mistral OCR on PDF...`);
 
-    const ocrResponse = await mistral.ocr.process({
+    const ocrResponse = await getMistral().ocr.process({
       model: "mistral-ocr-latest",
       document: {
         type: "document_url",
@@ -138,7 +138,7 @@ OUTPUT FORMAT (JSON only, no markdown, no backticks)
   "confidence": 0.0-1.0
 }`;
 
-    const chatResponse = await mistral.chat.complete({
+    const chatResponse = await getMistral().chat.complete({
       model: "mistral-large-latest",
       messages: [
         {

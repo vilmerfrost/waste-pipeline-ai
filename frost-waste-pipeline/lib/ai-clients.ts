@@ -8,28 +8,57 @@ import OpenAI from "openai";
 // ═══════════════════════════════════════════════════════════════════════════
 // ANTHROPIC (Direct) - Claude Sonnet 4.5 + Haiku 4.5
 // ═══════════════════════════════════════════════════════════════════════════
-export const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY!,
-});
+let cachedAnthropic: Anthropic | null = null;
+let cachedMistral: Mistral | null = null;
+let cachedOpenRouter: OpenAI | null = null;
+
+function requireEnv(key: string): string {
+  const value = process.env[key];
+  if (!value) {
+    throw new Error(
+      `Missing credentials. Please pass an apiKey, or set the ${key} environment variable.`
+    );
+  }
+  return value;
+}
+
+export function getAnthropic(): Anthropic {
+  if (!cachedAnthropic) {
+    cachedAnthropic = new Anthropic({
+      apiKey: requireEnv("ANTHROPIC_API_KEY"),
+    });
+  }
+  return cachedAnthropic;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MISTRAL (Direct) - OCR 3
 // ═══════════════════════════════════════════════════════════════════════════
-export const mistral = new Mistral({
-  apiKey: process.env.MISTRAL_API_KEY!,
-});
+export function getMistral(): Mistral {
+  if (!cachedMistral) {
+    cachedMistral = new Mistral({
+      apiKey: requireEnv("MISTRAL_API_KEY"),
+    });
+  }
+  return cachedMistral;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // OPENROUTER (For Gemini 3 Flash)
 // ═══════════════════════════════════════════════════════════════════════════
-export const openrouter = new OpenAI({
-  baseURL: "https://openrouter.ai/api/v1",
-  apiKey: process.env.OPENROUTER_API_KEY!,
-  defaultHeaders: {
-    "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL || "https://localhost:3000",
-    "X-Title": "Collecct Document Processor",
-  },
-});
+export function getOpenRouter(): OpenAI {
+  if (!cachedOpenRouter) {
+    cachedOpenRouter = new OpenAI({
+      baseURL: "https://openrouter.ai/api/v1",
+      apiKey: requireEnv("OPENROUTER_API_KEY"),
+      defaultHeaders: {
+        "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL || "https://localhost:3000",
+        "X-Title": "Collecct Document Processor",
+      },
+    });
+  }
+  return cachedOpenRouter;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // GEMINI 3 FLASH via OpenRouter
@@ -47,7 +76,7 @@ interface GeminiResponse {
  * Call Gemini 3 Flash for text-only prompts
  */
 export async function callGeminiFlash(prompt: string): Promise<GeminiResponse> {
-  const response = await openrouter.chat.completions.create({
+  const response = await getOpenRouter().chat.completions.create({
     model: GEMINI_MODEL,
     messages: [{ role: "user", content: prompt }],
     max_tokens: 8192,
@@ -68,7 +97,7 @@ export async function callGeminiFlashWithVision(
   base64Data: string,
   mimeType: string = "application/pdf"
 ): Promise<GeminiResponse> {
-  const response = await openrouter.chat.completions.create({
+  const response = await getOpenRouter().chat.completions.create({
     model: GEMINI_MODEL,
     messages: [
       {

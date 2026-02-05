@@ -1,7 +1,7 @@
 // Claude Haiku Verification (ALWAYS ON)
 // Verifies extracted data against source to detect hallucinations
 
-import { anthropic } from "./ai-clients";
+import { getAnthropic } from "./ai-clients";
 
 export interface LineItem {
   date: { value: string; confidence: number };
@@ -107,7 +107,7 @@ Return JSON (no markdown):
 If no issues found, return: {"issues": [], "confidence": 0.95}`;
 
     try {
-      const response = await anthropic.messages.create({
+      const response = await getAnthropic().messages.create({
         model: "claude-haiku-4-5-20251001",
         max_tokens: 4096,
         temperature: 0,

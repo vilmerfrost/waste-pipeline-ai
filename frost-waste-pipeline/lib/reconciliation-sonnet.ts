@@ -1,7 +1,7 @@
 // Claude Sonnet Reconciliation
 // Used when extraction confidence is below 0.80 to review and fix extracted data
 
-import { anthropic } from "./ai-clients";
+import { getAnthropic } from "./ai-clients";
 
 export interface LineItem {
   date: { value: string; confidence: number };
@@ -97,7 +97,7 @@ Return JSON (no markdown):
         ]
       : [{ type: "text", text: prompt }];
 
-    const response = await anthropic.messages.create({
+    const response = await getAnthropic().messages.create({
       model: "claude-sonnet-4-5-20250929",
       max_tokens: 16384,
       temperature: 0,
