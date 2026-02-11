@@ -845,11 +845,11 @@ export async function retryProcessing(documentId: string) {
 export async function archiveAllDocuments() {
   const supabase = createServiceRoleClient();
   
-  // Uppdatera alla dokument som INTE är arkiverade
+  // Archive all non-exported active documents
   const { error } = await supabase
     .from("documents")
     .update({ archived: true })
-    .eq("archived", false); // Påverkar bara den aktiva listan
+    .is("exported_at", null); // Only archive active (non-exported) documents
 
   if (error) {
     console.error("Archive All Error:", error);
@@ -858,6 +858,102 @@ export async function archiveAllDocuments() {
 
   revalidatePath("/");
   revalidatePath("/archive");
+  revalidatePath("/collecct");
+}
+
+/**
+ * ARKIVERA VALDA DOKUMENT
+ * Archives specific documents by ID
+ */
+export async function archiveSelectedDocuments(documentIds: string[]) {
+  if (!documentIds || documentIds.length === 0) {
+    throw new Error("Inga dokument valda för arkivering.");
+  }
+  
+  const supabase = createServiceRoleClient();
+  
+  const { error } = await supabase
+    .from("documents")
+    .update({ archived: true })
+    .in("id", documentIds);
+
+  if (error) {
+    console.error("Archive Selected Error:", error);
+    throw new Error("Kunde inte arkivera valda dokument.");
+  }
+
+  revalidatePath("/");
+  revalidatePath("/archive");
+  revalidatePath("/collecct");
+}
+
+/**
+ * GODKÄNN VALDA DOKUMENT
+ * Approves specific documents by ID (only needs_review ones)
+ */
+export async function approveSelectedDocuments(documentIds: string[]) {
+  if (!documentIds || documentIds.length === 0) {
+    throw new Error("Inga dokument valda för godkännande.");
+  }
+  
+  const supabase = createServiceRoleClient();
+  
+  const { error } = await supabase
+    .from("documents")
+    .update({ status: "approved" })
+    .in("id", documentIds)
+    .eq("status", "needs_review");
+
+  if (error) {
+    console.error("Approve Selected Error:", error);
+    throw new Error("Kunde inte godkänna valda dokument.");
+  }
+
+  revalidatePath("/");
+  revalidatePath("/collecct");
+}
+
+/**
+ * RADERA VALDA DOKUMENT
+ * Deletes specific documents by ID
+ */
+export async function deleteSelectedDocuments(documentIds: string[]) {
+  if (!documentIds || documentIds.length === 0) {
+    throw new Error("Inga dokument valda för radering.");
+  }
+  
+  const supabase = createServiceRoleClient();
+  
+  // Get storage paths for cleanup
+  const { data: docs } = await supabase
+    .from("documents")
+    .select("id, storage_path")
+    .in("id", documentIds);
+  
+  // Delete from storage
+  if (docs) {
+    const storagePaths = docs
+      .map(d => d.storage_path)
+      .filter(Boolean);
+    if (storagePaths.length > 0) {
+      await supabase.storage.from("raw_documents").remove(storagePaths);
+    }
+  }
+  
+  // Delete from database
+  const { error } = await supabase
+    .from("documents")
+    .delete()
+    .in("id", documentIds);
+
+  if (error) {
+    console.error("Delete Selected Error:", error);
+    throw new Error("Kunde inte radera valda dokument.");
+  }
+
+  revalidatePath("/");
+  revalidatePath("/archive");
+  revalidatePath("/collecct");
 }
 
 /**
@@ -879,6 +975,7 @@ export async function verifyAllDocuments() {
   }
 
   revalidatePath("/");
+  revalidatePath("/collecct");
   revalidatePath("/review/[id]", "page");
 }
 
