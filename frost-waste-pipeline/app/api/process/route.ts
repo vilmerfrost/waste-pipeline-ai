@@ -206,12 +206,12 @@ async function _extractAllRows_DEPRECATED(
     throw new Error("No data rows found!");
   }
   
-  // Infer receiver from filename
-  let receiver = "Okänd mottagare";
+  // Infer receiver HINT from filename (NOT hardcoded - just a hint)
+  let receiverHint = "";
   const fn = filename.toLowerCase();
-  if (fn.includes('ragn-sells') || fn.includes('ragnsells')) receiver = "Ragn-Sells";
-  else if (fn.includes('renova')) receiver = "Renova";
-  else if (fn.includes('nsr')) receiver = "NSR";
+  if (fn.includes('ragn-sells') || fn.includes('ragnsells')) receiverHint = "Ragn-Sells";
+  else if (fn.includes('renova')) receiverHint = "Renova";
+  else if (fn.includes('nsr')) receiverHint = "NSR";
   
   // Extract date from filename
   const dateMatch = filename.match(/(\d{4}-\d{2}-\d{2})/);
@@ -252,13 +252,13 @@ MANDATORY FIELDS:
 - material: Material column (use standard names)
 - weightKg: Kvantitet column (convert to kg if needed)
 - unit: Always "Kg"
-- receiver: Use "${receiver}" for all rows
+- receiver: Extract from document content. If not found, leave EMPTY.${receiverHint ? ` Hint: filename suggests "${receiverHint}" but verify from document.` : ''}
 
 CRITICAL RULES:
 1. EXTRACT EVERY ROW - Do NOT skip any!
 2. If Enhet = "ton", multiply Kvantitet by 1000
 3. If Enhet = "g", divide Kvantitet by 1000
-4. Use ${receiver} as receiver for ALL rows
+4. Extract receiver from document content. If not found, leave receiver as EMPTY string.
 5. Use "${documentDate || 'today\'s date'}" as date if date column is missing
 
 TABLE DATA:
@@ -267,7 +267,7 @@ ${tsv}
 OUTPUT (JSON only, no markdown, NO {value, confidence} wrappers):
 {
   "items": [
-    {"date": "${documentDate || "2024-01-16"}", "location": "Artedigränd 10 UMEÅ", "material": "Papper, kontor", "weightKg": 185.00, "unit": "Kg", "receiver": "${receiver}"}
+    {"date": "${documentDate || "2024-01-16"}", "location": "Artedigränd 10 UMEÅ", "material": "Papper, kontor", "weightKg": 185.00, "unit": "Kg", "receiver": ""}
   ]
 }
 
@@ -334,11 +334,11 @@ Extract ALL ${chunkRows.length} rows from this chunk!`;
         
         const items = parsed?.items || [];
         
-        // Ensure all items have date and receiver
+        // Ensure all items have date; use receiver hint as fallback only
         processedItems = items.map((item: any) => ({
           ...item,
           date: item.date || documentDate || new Date().toISOString().split('T')[0],
-          receiver: item.receiver || receiver,
+          receiver: (item.receiver && String(item.receiver).trim() !== "") ? item.receiver : (receiverHint || ""),
         }));
         
         allItems.push(...processedItems);
@@ -492,13 +492,13 @@ async function extractFromPDF(
   const base64Data = Buffer.from(pdfBuffer).toString("base64");
   log(`✓ PDF converted to base64 (${(pdfBuffer.byteLength / 1024).toFixed(0)} KB)`, 'success');
   
-  // Infer receiver from filename
-  let receiver = "Okänd mottagare";
+  // Infer receiver HINT from filename (NOT hardcoded - just a hint for the AI)
+  let receiverHint = "";
   const fn = filename.toLowerCase();
-  if (fn.includes('ragn-sells') || fn.includes('ragnsells')) receiver = "Ragn-Sells";
-  else if (fn.includes('renova')) receiver = "Renova";
-  else if (fn.includes('nsr')) receiver = "NSR";
-  log(`✓ Inferred receiver: ${receiver}`, 'info');
+  if (fn.includes('ragn-sells') || fn.includes('ragnsells')) receiverHint = "Ragn-Sells";
+  else if (fn.includes('renova')) receiverHint = "Renova";
+  else if (fn.includes('nsr')) receiverHint = "NSR";
+  log(`✓ Receiver hint from filename: ${receiverHint || 'none'}`, 'info');
   
   // Extract date from filename
   const dateMatch = filename.match(/(\d{4}-\d{2}-\d{2})/);
@@ -538,7 +538,7 @@ OUTPUT FORMAT (JSON, no markdown, NO {value, confidence} wrappers):
     "projectAddress": "Östergårds Förskola, Malmö",
     "address": "Östergårds Förskola",        // Same as projectAddress
     "supplier": "Stefan Hallberg",           // From footer/bottom/sender
-    "receiver": "${receiver}"                 // Use this if not in document
+    "receiver": ""                             // Extract from document. If not found, leave EMPTY.${receiverHint ? ` Hint: filename suggests "${receiverHint}" but verify from document.` : ''}
   },
   "items": [
     {
@@ -547,7 +547,7 @@ OUTPUT FORMAT (JSON, no markdown, NO {value, confidence} wrappers):
       "material": "Trä",
       "weightKg": 3820,
       "unit": "Kg",
-      "receiver": "${receiver}"
+      "receiver": ""                          // Extract from document content. Leave empty if not found.
     }
   ]
 }
@@ -561,7 +561,7 @@ RULES:
 6. If table has NO date column, use document date for all rows
 7. All weights in kg (convert from ton: × 1000, from g: ÷ 1000)
 8. Extract EVERY row from table
-9. Use "${receiver}" as receiver if not specified
+9. Extract receiver from document content. If not found, leave receiver as EMPTY string
 
 FALLBACKS (if not found in document):
 - Date: Use "${filenameDate || new Date().toISOString().split('T')[0]}"
@@ -697,10 +697,15 @@ Extract ALL material rows from the table. Return JSON only!`;
       const itemDate = item.date ? parseExcelDate(item.date) : null;
       const finalItemDate = validateAndFixDate(itemDate, filenameDate, filename) || documentDate;
       
+      // Receiver logic: AI-extracted value takes priority. Filename hint as low-confidence fallback.
+      const extractedReceiver = item.receiver && String(item.receiver).trim() !== "" && String(item.receiver).trim().toLowerCase() !== "okänd mottagare"
+        ? item.receiver 
+        : null;
+      
       return {
         ...item,
         date: finalItemDate, // Use validated date
-        receiver: item.receiver || receiver,
+        receiver: extractedReceiver || receiverHint || "",
         location: location, // Use document address if row doesn't have one
         weightKg: parseFloat(String(item.weightKg || 0)), // Ensure it's a number
       };
@@ -779,7 +784,7 @@ Extract ALL material rows from the table. Return JSON only!`;
         date: documentDate,
         address: documentAddress || "Okänd adress",
         supplier: documentSupplier,
-        receiver: receiver
+        receiver: documentInfo.receiver || receiverHint || ""
       },
       _validation: {
         completeness: processedItems.length > 0 ? 95 : 0,

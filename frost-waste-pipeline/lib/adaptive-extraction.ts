@@ -255,13 +255,13 @@ async function extractChunkWithFallback(
     .map(row => row.map(cell => String(cell || "")).join('\t'))
     .join('\n');
   
-  // Infer receiver
-  let receiver = "Okänd mottagare";
+  // Infer receiver HINT from filename (NOT a hard default - just a hint for the AI)
+  let receiverHint = "";
   const fn = filename.toLowerCase();
-  if (fn.includes('ragn-sells') || fn.includes('ragnsells')) receiver = "Ragn-Sells";
-  else if (fn.includes('renova')) receiver = "Renova";
-  else if (fn.includes('nsr')) receiver = "NSR";
-  else if (fn.includes('collecct')) receiver = "Collecct";
+  if (fn.includes('ragn-sells') || fn.includes('ragnsells')) receiverHint = "Ragn-Sells";
+  else if (fn.includes('renova')) receiverHint = "Renova";
+  else if (fn.includes('nsr')) receiverHint = "NSR";
+  else if (fn.includes('collecct')) receiverHint = "Collecct";
   
   // Extract date from filename
   const dateMatch = filename.match(/(\d{4}[-_]\d{2}[-_]\d{2})/);
@@ -294,7 +294,7 @@ Detected columns:
 - MATERIAL: "${structure.materialColumn}"
 - WEIGHT: "${structure.weightColumn}" (convert to kg!)
 - UNIT: "${structure.unitColumn}"
-- RECEIVER: "${structure.receiverColumn}" or use default: "${receiver}"
+- RECEIVER: "${structure.receiverColumn}" — Extract from document content. If not found, leave EMPTY.${receiverHint ? ` Hint: filename suggests "${receiverHint}" but verify from document content.` : ''}
 - HAZARDOUS: "${structure.hazardousColumn || 'not detected'}"
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -355,13 +355,14 @@ ${settings.custom_instructions}
 ` : ''}═══════════════════════════════════════════════════════════════════════════════
 JSON OUTPUT FORMAT (no markdown, no backticks)
 ═══════════════════════════════════════════════════════════════════════════════
-{"items":[{"date":"2024-01-16","location":"Address","material":"Material","weightKg":185,"unit":"Kg","receiver":"${receiver}","isHazardous":false}]}
+{"items":[{"date":"2024-01-16","location":"Address","material":"Material","weightKg":185,"unit":"Kg","receiver":"","isHazardous":false}]}
 
 CRITICAL:
 1. Extract ALL ${chunkRows.length} rows!
 2. Output dates as YYYY-MM-DD
 3. Convert all weights to kg
-4. Set isHazardous:true if hazardous waste indicator present (Farligt avfall / Farlig avfall / Vaarallinen jäte / Hazardous)`;
+4. Set isHazardous:true if hazardous waste indicator present (Farligt avfall / Farlig avfall / Vaarallinen jäte / Hazardous)
+5. RECEIVER: Extract from document content. If no receiver column exists or value not found, leave receiver as EMPTY string "".${receiverHint ? ` The filename hints "${receiverHint}" but ONLY use this if you cannot find a receiver in the document data.` : ''}`;
 
   // Get max_tokens from settings or use default
   const maxTokens = settings.extraction_max_tokens || 16384;
@@ -946,12 +947,12 @@ export async function extractAdaptive(
     log(`   Total time: ${totalVerificationTime}ms`, 'info');
   }
   
-  // Infer receiver and date from filename for all items
-  let receiver = "Okänd mottagare";
-  const fn = filename.toLowerCase();
-  if (fn.includes('ragn-sells') || fn.includes('ragnsells')) receiver = "Ragn-Sells";
-  else if (fn.includes('renova')) receiver = "Renova";
-  else if (fn.includes('nsr')) receiver = "NSR";
+  // Infer receiver HINT from filename (used as low-confidence fallback only)
+  let receiverHint = "";
+  const fn2 = filename.toLowerCase();
+  if (fn2.includes('ragn-sells') || fn2.includes('ragnsells')) receiverHint = "Ragn-Sells";
+  else if (fn2.includes('renova')) receiverHint = "Renova";
+  else if (fn2.includes('nsr')) receiverHint = "NSR";
   
   // Extract date from filename (multiple patterns)
   // Remove (1), (2), etc. before extracting to handle duplicate filenames
@@ -1104,15 +1105,20 @@ export async function extractAdaptive(
     log(`✓ Header period detected: ${structure.headerPeriod} → ${headerPeriodDate}`, 'info');
   }
   
-  // Ensure all items have date and receiver
+  // Ensure all items have date; use receiver hint as low-confidence fallback only
   const processedItems = allItems.map((item: any) => {
     const itemDate = item.date ? parseExcelDate(item.date) : null;
     const finalDate = validateAndFixDate(itemDate, headerPeriodDate, documentDate);
     
+    // Receiver logic: AI-extracted value takes priority. If empty/missing, use filename hint as fallback.
+    const extractedReceiver = item.receiver && String(item.receiver).trim() !== "" 
+      ? item.receiver 
+      : null;
+    
     return {
       ...item,
       date: finalDate,
-      receiver: item.receiver || receiver,
+      receiver: extractedReceiver || receiverHint || "",
     };
   });
   
