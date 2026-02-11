@@ -48,14 +48,14 @@ async function extractAllRows(
     throw new Error("No data rows found!");
   }
   
-  // Infer receiver
-  let receiver = "Okänd mottagare";
+  // Infer receiver HINT from filename (NOT hardcoded - just a hint)
+  let receiverHint = "";
   const fn = filename.toLowerCase();
-  if (fn.includes('ragn-sells') || fn.includes('ragnsells')) receiver = "Ragn-Sells";
-  else if (fn.includes('renova')) receiver = "Renova";
-  else if (fn.includes('nsr')) receiver = "NSR";
+  if (fn.includes('ragn-sells') || fn.includes('ragnsells')) receiverHint = "Ragn-Sells";
+  else if (fn.includes('renova')) receiverHint = "Renova";
+  else if (fn.includes('nsr')) receiverHint = "NSR";
   
-  console.log(`✓ Receiver: ${receiver}\n`);
+  console.log(`✓ Receiver hint: ${receiverHint || 'none'}\n`);
   
   // Material synonyms
   const synonyms = `Trä: Brädor, Virke, Lastpall, Spont
@@ -97,13 +97,13 @@ MANDATORY FIELDS:
 - material: Material column (use standard names)
 - weightKg: Kvantitet column (convert to kg if needed)
 - unit: Always "Kg"
-- receiver: Use "${receiver}" for all rows
+- receiver: Extract from document content. If not found, leave EMPTY.${receiverHint ? ` Hint: filename suggests "${receiverHint}" but verify from document.` : ''}
 
 CRITICAL RULES:
 1. EXTRACT EVERY ROW - Do NOT skip any!
 2. If Enhet = "ton", multiply Kvantitet by 1000
 3. If Enhet = "g", divide Kvantitet by 1000
-4. Use ${receiver} as receiver for ALL rows
+4. Extract receiver from document content. If not found, leave receiver as EMPTY string.
 
 TABLE DATA:
 ${tsv}
@@ -111,7 +111,7 @@ ${tsv}
 OUTPUT (JSON only, no markdown):
 {
   "items": [
-    {"date": "2024-01-16", "location": "Artedigränd 10 UMEÅ", "material": "Papper, kontor", "weightKg": 185.00, "unit": "Kg", "receiver": "${receiver}"}
+    {"date": "2024-01-16", "location": "Artedigränd 10 UMEÅ", "material": "Papper, kontor", "weightKg": 185.00, "unit": "Kg", "receiver": ""}
   ]
 }
 

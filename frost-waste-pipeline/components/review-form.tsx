@@ -224,10 +224,8 @@ export function ReviewForm({
     }) || true // Always show if we have rows - allows editing missing addresses
   );
   
-  const hasLineReceiver = lineItems.some((item: any) => {
-    const rec = typeof item.receiver === 'object' ? item.receiver?.value : item.receiver;
-    return rec && String(rec).length > 1;
-  });
+  // Always show receiver column so users can edit/add receiver for each row
+  const hasLineReceiver = lineItems.length > 0;
   
   const hasHandling = lineItems.some((item: any) => {
     const hand = typeof item.handling === 'object' ? item.handling?.value : item.handling;

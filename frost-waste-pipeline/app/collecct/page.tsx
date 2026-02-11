@@ -2,16 +2,12 @@ import { createServiceRoleClient } from "@/lib/supabase";
 import React from "react";
 import Link from "next/link";
 import { FileText, Activity, ArrowLeft, Settings, Archive } from "lucide-react";
-import { CollecctMassArchiveWrapper } from "@/components/collecct-mass-archive-wrapper";
 import { AutoFetchButton } from "@/components/auto-fetch-button";
 import { BatchProcessButton } from "@/components/batch-process-button";
 import { ExportToAzureButton } from "@/components/export-to-azure-button";
 import { Breadcrumbs } from "@/components/breadcrumbs";
 import { getDashboardBreadcrumbs } from "@/lib/breadcrumb-utils";
-import { formatDate } from "@/lib/time-utils";
-import { RelativeTime } from "@/components/relative-time";
-import { truncateFilename } from "@/lib/filename-utils";
-import { Pagination } from "@/components/pagination";
+import { UnifiedDocumentTable } from "@/components/unified-document-table";
 import { RecentDocuments } from "@/components/recent-documents";
 
 export const dynamic = "force-dynamic";
@@ -24,8 +20,11 @@ export default async function CollecctDashboard({
   const supabase = createServiceRoleClient();
   const params = await searchParams;
   const activeTab = params.tab || "active";
-  const isMassArchive = params.mode === "mass-archive";
-  
+
+  // Pagination params
+  const currentPage = Math.max(1, parseInt(params.page || "1", 10));
+  const itemsPerPage = Math.min(50, Math.max(10, parseInt(params.perPage || "50", 10)));
+
   // Get independent counts for tabs
   const { count: activeCount } = await supabase
     .from("documents")
@@ -37,17 +36,12 @@ export default async function CollecctDashboard({
     .select("*", { count: "exact", head: true })
     .not("exported_at", "is", null);
 
-  // Pagination params
-  const currentPage = Math.max(1, parseInt(params.page || "1", 10));
-  const itemsPerPage = Math.min(50, Math.max(10, parseInt(params.perPage || "10", 10)));
-
-  // Fetch documents - filter by tab
+  // Fetch documents based on tab
   let documentsQuery = supabase
     .from("documents")
     .select("*")
-    .order("updated_at", { ascending: false });
+    .order("created_at", { ascending: false });
 
-  // Filter: Active tab shows non-exported, Archive tab shows exported
   if (activeTab === "archive") {
     documentsQuery = documentsQuery.not("exported_at", "is", null);
   } else {
@@ -56,107 +50,40 @@ export default async function CollecctDashboard({
 
   const { data: documents, error } = await documentsQuery;
 
-  // DEBUG: Log raw Supabase response
-  if (documents && documents.length > 0) {
-    console.log('=== SUPABASE RAW RESPONSE (first 3 docs) ===');
-    documents.slice(0, 3).forEach((doc: any, idx: number) => {
-      console.log(`Doc ${idx + 1}:`, {
-        id: doc.id,
-        filename: doc.filename,
-        created_at: doc.created_at,
-        created_at_type: typeof doc.created_at,
-        updated_at: doc.updated_at,
-        updated_at_type: typeof doc.updated_at,
-        created_at_raw: JSON.stringify(doc.created_at),
-        updated_at_raw: JSON.stringify(doc.updated_at),
-      });
-    });
-    console.log('=== END SUPABASE RAW RESPONSE ===');
-  }
   if (error) {
-    console.error('Supabase query error:', error);
+    console.error("Supabase query error:", error);
   }
 
-  // Fetch paginated needs_review documents separately (only for active tab)
-  let needsReviewDocs: any[] = [];
-  let needsReviewTotal = 0;
-  
-  if (activeTab === "active") {
-    const startIndex = (currentPage - 1) * itemsPerPage;
-    const endIndex = startIndex + itemsPerPage - 1;
-    
-    // Get total count - removed exported_at filter since needs_review shouldn't be exported
-    const { count } = await supabase
-      .from("documents")
-      .select("*", { count: "exact", head: true })
-      .eq("status", "needs_review");
-    
-    needsReviewTotal = count || 0;
-    
-    // FALLBACK: Also check the main documents array in case count query missed some
-    const needsReviewFromMain = documents?.filter(d => d.status === "needs_review") || [];
-    if (needsReviewTotal === 0 && needsReviewFromMain.length > 0) {
-      needsReviewTotal = needsReviewFromMain.length;
-    }
-    
-    // Get paginated data - removed exported_at filter
-    const { data: paginatedNeedsReview } = await supabase
-      .from("documents")
-      .select("*")
-      .eq("status", "needs_review")
-      .order("updated_at", { ascending: true })
-      .range(startIndex, endIndex);
-    
-    needsReviewDocs = paginatedNeedsReview || [];
-    
-    // FALLBACK: If paginated query returned empty but we have docs in main array, use those
-    if (needsReviewDocs.length === 0 && needsReviewFromMain.length > 0) {
-      needsReviewDocs = needsReviewFromMain.slice(startIndex, endIndex + 1);
-    }
-  }
+  // All active (non-exported) documents for the unified table
+  const activeDocs = activeTab === "active"
+    ? documents?.filter(d => !d.exported_at) || []
+    : [];
 
-  // Filter documents by status (only for active tab)
-  const uploadedDocs = activeTab === "active" 
-    ? documents?.filter(d => d.status === "uploaded") || []
-    : [];
-  const processingDocs = activeTab === "active"
-    ? documents?.filter(d => d.status === "processing") || []
-    : [];
-  const approvedDocs = activeTab === "active"
-    ? documents?.filter(d => d.status === "approved") || []
-    : [];
-  const failedDocs = activeTab === "active"
-    ? documents?.filter(d => d.status === "error") || []
-    : [];
+  // Exported docs for archive tab
   const exportedDocs = activeTab === "archive"
-    ? documents?.filter(d => d.status === "exported") || []
+    ? documents || []
     : [];
 
-  const stats = {
-    total: activeTab === "active" 
-      ? (documents?.filter(d => !d.exported_at).length || 0)
-      : (documents?.filter(d => d.exported_at).length || 0),
-    uploaded: uploadedDocs.length,
-    processing: processingDocs.length,
-    needsReview: activeTab === "active" ? needsReviewTotal : 0,
-    approved: approvedDocs.length,
-    failed: failedDocs.length,
-    exported: exportedDocs.length,
-  };
+  // Uploaded docs for batch processing
+  const uploadedDocs = activeDocs.filter(d => d.status === "uploaded");
+  const approvedDocs = activeDocs.filter(d => d.status === "approved");
 
-  // Show documents based on active tab (max 10 for cleaner look)
-  const recentDocs = activeTab === "archive"
-    ? exportedDocs.slice(0, 10)
-    : documents?.filter(d => d.status !== 'needs_review').slice(0, 10) || [];
+  // Stats for cards
+  const stats = {
+    total: activeDocs.length,
+    needsReview: activeDocs.filter(d => d.status === "needs_review").length,
+    approved: activeDocs.filter(d => d.status === "approved").length,
+    failed: activeDocs.filter(d => d.status === "error").length,
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header - Clean and Professional */}
+      {/* Header */}
       <div className="bg-white border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-6 py-6">
           {/* Breadcrumbs */}
           <Breadcrumbs items={getDashboardBreadcrumbs()} className="mb-4" />
-          
+
           {/* Top Navigation Bar */}
           <div className="flex items-center justify-between mb-6">
             {/* Left: Back button */}
@@ -170,22 +97,12 @@ export default async function CollecctDashboard({
 
             {/* Right: Action buttons */}
             <div className="flex items-center gap-3">
-              {activeTab === "active" && (
-                  <Link
-                    href={isMassArchive ? "/collecct" : "/collecct?mode=mass-archive"}
-                    className={`flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-all text-sm font-medium ${isMassArchive ? 'bg-gray-100 ring-2 ring-gray-200' : ''}`}
-                  >
-                    <Archive className="w-4 h-4" />
-                    <span>{isMassArchive ? "Avsluta" : "Mass-arkivera"}</span>
-                  </Link>
-              )}
-
               {activeTab === "active" && approvedDocs.length > 0 && (
-                <ExportToAzureButton 
+                <ExportToAzureButton
                   selectedDocuments={approvedDocs.map(d => d.id)}
                 />
               )}
-              
+
               <Link
                 href="/health"
                 className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-all text-sm font-medium"
@@ -224,7 +141,7 @@ export default async function CollecctDashboard({
           <p className="text-sm text-gray-600">
             Granska och godkänn dokument för Collecct AB.
           </p>
-          
+
           {/* Tabs */}
           <div className="flex gap-2 border-b border-gray-200 mt-6">
             <a
@@ -253,231 +170,92 @@ export default async function CollecctDashboard({
 
       {/* Content */}
       <div className="max-w-7xl mx-auto px-6 py-8">
-        {isMassArchive ? (
-             <CollecctMassArchiveWrapper 
-                documents={documents?.filter(d => !d.exported_at).map(d => ({
-                    id: d.id,
-                    filename: d.filename,
-                    status: d.status
-                })) || []} 
-             />
-        ) : (
+        {activeTab === "active" ? (
           <div>
-        {/* Batch Processing UI */}
-        {uploadedDocs.length > 0 && (
-          <BatchProcessButton uploadedDocs={uploadedDocs} />
-        )}
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-          {/* Total */}
-          <div className="bg-white rounded-lg border border-gray-200 p-6">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium text-gray-600 uppercase tracking-wide">
-                TOTALT
-              </span>
-              <div className="w-2 h-2 rounded-full bg-gray-400" />
-            </div>
-            <div className="text-4xl font-bold text-gray-900 mb-1">
-              {stats.total}
-            </div>
-            <p className="text-xs text-gray-500">Dokument</p>
-          </div>
-
-          {/* Needs Review - Clickable */}
-          <a 
-            href="#needs-review-section"
-            className="bg-white rounded-lg border border-gray-200 p-6 hover:shadow-md transition-shadow cursor-pointer block"
-          >
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium text-gray-600 uppercase tracking-wide">
-                BEHÖVER GRANSKNING
-              </span>
-              <div className="w-2 h-2 rounded-full bg-yellow-500" />
-            </div>
-            <div className="text-4xl font-bold text-gray-900 mb-1">
-              {stats.needsReview}
-            </div>
-            <p className="text-xs text-yellow-600 font-medium">Väntar - Klicka för att visa</p>
-          </a>
-
-          {/* Approved */}
-          <div className="bg-white rounded-lg border border-gray-200 p-6">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium text-gray-600 uppercase tracking-wide">
-                GODKÄNDA
-              </span>
-              <div className="w-2 h-2 rounded-full bg-green-500" />
-            </div>
-            <div className="text-4xl font-bold text-gray-900 mb-1">
-              {stats.approved}
-            </div>
-            <p className="text-xs text-gray-500">
-              {activeTab === "active" ? "Redo för export" : "Exporterade"}
-            </p>
-          </div>
-
-          {/* Failed */}
-          <div className="bg-white rounded-lg border border-gray-200 p-6">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium text-gray-600 uppercase tracking-wide">
-                FEL
-              </span>
-              <div className="w-2 h-2 rounded-full bg-red-500" />
-            </div>
-            <div className="text-4xl font-bold text-gray-900 mb-1">
-              {stats.failed}
-            </div>
-            <p className="text-xs text-red-600 font-medium">Kräver åtgärd</p>
-          </div>
-        </div>
-
-        {/* PRIORITY: Documents Needing Review - SHOW FIRST */}
-        {activeTab === "active" && (
-          <div id="needs-review-section" className="mb-8">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-                <span className="w-3 h-3 bg-yellow-500 rounded-full animate-pulse"></span>
-                Behöver granskning
-              </h2>
-              <p className="text-sm text-gray-500">
-                {needsReviewTotal} dokument väntar
-              </p>
-            </div>
-
-            {needsReviewDocs.length === 0 ? (
-              <div className="bg-white rounded-lg border-2 border-dashed border-yellow-300 p-16 text-center">
-                <div className="inline-flex items-center justify-center w-16 h-16 bg-yellow-50 rounded-full mb-4">
-                  <FileText className="w-8 h-8 text-yellow-600" />
-                </div>
-                <h3 className="text-xl font-semibold text-gray-900 mb-2">
-                  Inga dokument behöver granskning
-                </h3>
-                <p className="text-gray-600">
-                  Alla dokument är granskade eller väntar på bearbetning.
-                </p>
-              </div>
-            ) : (
-              <>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {needsReviewDocs.map((doc) => {
-                const validation = doc.extracted_data?._validation;
-                const completeness = validation?.completeness ?? null;
-                const materialCount = doc.extracted_data?.lineItems?.length || doc.extracted_data?.rows?.length || 0;
-                
-                // Helper to extract numeric value from {value, confidence} or plain number
-                const getNumericValue = (val: any): number => {
-                  if (typeof val === 'object' && val?.value !== undefined) return Number(val.value) || 0;
-                  return Number(val) || 0;
-                };
-
-                const totalWeight = getNumericValue(doc.extracted_data?.totalWeightKg) || 
-                  (doc.extracted_data?.lineItems?.reduce((sum: number, item: any) => 
-                    sum + getNumericValue(item.weightKg), 0) || 0);
-
-                return (
-                  <div
-                    key={doc.id}
-                    className="bg-white rounded-lg border-2 border-yellow-300 overflow-hidden hover:shadow-md transition-shadow"
-                  >
-                    <div className="p-5 border-b border-yellow-100 bg-yellow-50">
-                      <div className="flex items-start gap-3 mb-3">
-                        <div className="flex-shrink-0 w-10 h-10 bg-yellow-100 rounded-lg flex items-center justify-center">
-                          <FileText className="w-5 h-5 text-yellow-700" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <h3 
-                            className="font-medium text-gray-900 text-sm truncate mb-1"
-                            title={doc.filename}
-                          >
-                            {truncateFilename(doc.filename, 30)}
-                          </h3>
-<p className="text-xs text-gray-500" title={formatDate(doc.updated_at)}>
-                          <RelativeTime date={doc.updated_at} />
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="p-5 space-y-3">
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-600">Material:</span>
-                        <span className="font-medium text-gray-900">{materialCount} rader</span>
-                      </div>
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-600">Total vikt:</span>
-                        <span className="font-medium text-gray-900">
-                          {totalWeight > 0 ? `${(totalWeight / 1000).toFixed(1)} ton` : '0 kg'}
-                        </span>
-                      </div>
-                      
-                      <div>
-                        {completeness !== null ? (
-                          <>
-                            <div className="flex items-center justify-between text-xs mb-1">
-                              <span className="text-gray-600">Fullständighet:</span>
-                              <span className={`font-medium ${
-                                completeness >= 95 ? 'text-green-600' :
-                                completeness >= 80 ? 'text-yellow-600' :
-                                'text-red-600'
-                              }`}>
-                                {completeness.toFixed(0)}%
-                              </span>
-                            </div>
-                            <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
-                              <div
-                                className={`h-full transition-all ${
-                                  completeness >= 95 ? 'bg-green-500' :
-                                  completeness >= 80 ? 'bg-yellow-500' :
-                                  'bg-red-500'
-                                }`}
-                                style={{ width: `${Math.min(completeness, 100)}%` }}
-                              />
-                            </div>
-                          </>
-                        ) : (
-                          <div className="flex items-center justify-between text-xs">
-                            <span className="text-gray-600">Fullständighet:</span>
-                            <span className="text-gray-400">-</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="p-5 pt-0">
-                      <Link
-                        href={`/review/${doc.id}`}
-                        className="block w-full py-2.5 px-4 bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium rounded-lg transition-colors text-center"
-                      >
-                        Granska nu
-                      </Link>
-                    </div>
-                  </div>
-                );
-                  })}
-                </div>
-                
-                {/* Pagination */}
-                {needsReviewTotal >= itemsPerPage && (
-                  <Pagination
-                    currentPage={currentPage}
-                    totalPages={Math.ceil(needsReviewTotal / itemsPerPage)}
-                    totalItems={needsReviewTotal}
-                    itemsPerPage={itemsPerPage}
-                    onPageSizeChange={() => {}}
-                  />
-                )}
-              </>
+            {/* Batch Processing UI */}
+            {uploadedDocs.length > 0 && (
+              <BatchProcessButton uploadedDocs={uploadedDocs} />
             )}
-          </div>
-        )}
 
-        {/* Senaste Dokument Section */}
-        <RecentDocuments 
-          documents={recentDocs} 
-          total={stats.total} 
-          activeTab={activeTab} 
-        />
-        </div>
+            {/* Stats Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+              {/* Total */}
+              <div className="bg-white rounded-lg border border-gray-200 p-6">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium text-gray-600 uppercase tracking-wide">
+                    TOTALT
+                  </span>
+                  <div className="w-2 h-2 rounded-full bg-gray-400" />
+                </div>
+                <div className="text-4xl font-bold text-gray-900 mb-1">
+                  {stats.total}
+                </div>
+                <p className="text-xs text-gray-500">Dokument</p>
+              </div>
+
+              {/* Needs Review */}
+              <div className="bg-white rounded-lg border border-gray-200 p-6">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium text-gray-600 uppercase tracking-wide">
+                    BEHÖVER GRANSKNING
+                  </span>
+                  <div className="w-2 h-2 rounded-full bg-yellow-500" />
+                </div>
+                <div className="text-4xl font-bold text-gray-900 mb-1">
+                  {stats.needsReview}
+                </div>
+                <p className="text-xs text-yellow-600 font-medium">Väntar</p>
+              </div>
+
+              {/* Approved */}
+              <div className="bg-white rounded-lg border border-gray-200 p-6">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium text-gray-600 uppercase tracking-wide">
+                    GODKÄNDA
+                  </span>
+                  <div className="w-2 h-2 rounded-full bg-green-500" />
+                </div>
+                <div className="text-4xl font-bold text-gray-900 mb-1">
+                  {stats.approved}
+                </div>
+                <p className="text-xs text-gray-500">Redo för export</p>
+              </div>
+
+              {/* Failed */}
+              <div className="bg-white rounded-lg border border-gray-200 p-6">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium text-gray-600 uppercase tracking-wide">
+                    FEL
+                  </span>
+                  <div className="w-2 h-2 rounded-full bg-red-500" />
+                </div>
+                <div className="text-4xl font-bold text-gray-900 mb-1">
+                  {stats.failed}
+                </div>
+                <p className="text-xs text-red-600 font-medium">Kräver åtgärd</p>
+              </div>
+            </div>
+
+            {/* Unified Document Table - ONE table for ALL active documents */}
+            <div className="mb-8">
+              <h2 className="text-xl font-bold text-gray-900 mb-4">
+                Alla dokument
+              </h2>
+              <UnifiedDocumentTable
+                documents={activeDocs}
+                currentPage={currentPage}
+                totalItems={activeDocs.length}
+                itemsPerPage={itemsPerPage}
+              />
+            </div>
+          </div>
+        ) : (
+          /* Archive Tab - keep separate for exported documents */
+          <RecentDocuments
+            documents={exportedDocs.slice(0, 50)}
+            total={exportedDocs.length}
+            activeTab={activeTab}
+          />
         )}
       </div>
     </div>
