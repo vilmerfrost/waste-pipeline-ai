@@ -445,7 +445,7 @@ function cleanPDFExtractionData(items: any[]): any[] {
       material: item.material?.value || item.material || "Okänt material",
       weightKg: parseFloat(String(item.weightKg?.value || item.weightKg || item.weight?.value || item.weight || 0)),
       unit: item.unit?.value || item.unit || "Kg",
-      receiver: item.receiver?.value || item.receiver || "Okänd mottagare",
+      receiver: item.receiver?.value || item.receiver || "",
     };
     
     // Add optional fields if they exist
