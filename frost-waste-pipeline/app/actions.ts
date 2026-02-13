@@ -708,18 +708,20 @@ export async function saveDocument(formData: FormData) {
       const originalItem = existingLineItems[index] || {};
       
       // Merge: original fields + edited fields (edited fields take priority)
+      // For address/receiver: use !== null to distinguish "field sent as empty" from "field not in form"
+      // This allows users to clear fields (e.g. remove auto-assigned "Ragn-Sells")
       lineItems.push({
         ...originalItem, // Keep ALL original fields (wasteCode, costSEK, unit, etc.)
         // Override with edited values from form:
         material: { value: material || "", confidence: 1 },
         weightKg: { value: weightKg, confidence: 1 },
-        address: address ? { value: address, confidence: 1 } : originalItem.address,
-        location: location ? { value: location, confidence: 1 } : originalItem.location,
-        receiver: receiver ? { value: receiver, confidence: 1 } : originalItem.receiver,
+        address: address !== null ? { value: address, confidence: 1 } : originalItem.address,
+        location: location !== null ? { value: location, confidence: 1 } : originalItem.location,
+        receiver: receiver !== null ? { value: receiver, confidence: 1 } : originalItem.receiver,
         handling: handling ? { value: handling, confidence: 1 } : originalItem.handling,
         isHazardous: { value: isHazardous, confidence: 1 },
         co2Saved: co2Saved > 0 ? { value: co2Saved, confidence: 1 } : originalItem.co2Saved,
-        // ✅ NEW: Save row-specific date (critical for export!)
+        // Save row-specific date (critical for export!)
         date: rowDate ? { value: rowDate, confidence: 1 } : originalItem.date,
       });
     }
@@ -746,11 +748,12 @@ export async function saveDocument(formData: FormData) {
     totalCostSEK: cost,
     totalCo2Saved,
     // Update document-level metadata with edited values
+    // Use ?? (nullish coalescing) so empty strings are preserved when user clears a field
     documentMetadata: {
-      date: editedDate || existingData.documentMetadata?.date || "",
-      supplier: editedSupplier || existingData.documentMetadata?.supplier || "",
-      address: editedAddress || existingData.documentMetadata?.address || "",
-      receiver: editedReceiver || existingData.documentMetadata?.receiver || "",
+      date: editedDate ?? existingData.documentMetadata?.date ?? "",
+      supplier: editedSupplier ?? existingData.documentMetadata?.supplier ?? "",
+      address: editedAddress ?? existingData.documentMetadata?.address ?? "",
+      receiver: editedReceiver ?? existingData.documentMetadata?.receiver ?? "",
     },
     // Also update top-level fields for backward compatibility
     date: { value: editedDate || "", confidence: 1 },

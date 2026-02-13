@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { SmartInput } from "@/components/smart-input";
 import { saveDocument } from "@/app/actions";
-import { ArrowRight, Save, Skull, Plus, Trash2, AlertTriangle } from "lucide-react";
+import { ArrowRight, Save, Skull, Plus, Trash2, AlertTriangle, Eraser } from "lucide-react";
 import { useUnsavedChanges } from "@/hooks/use-unsaved-changes";
 
 export function ReviewForm({
@@ -214,6 +214,21 @@ export function ReviewForm({
     setLineItems([...lineItems, newItem]);
   };
 
+  // Clear inherited fields (Datum, Adress, Mottagare) across all rows
+  const clearInheritedFields = () => {
+    if (lineItems.length === 0) return;
+    if (!confirm("Töm Datum, Adress och Mottagare för alla rader?")) return;
+    setHasBeenModified(true);
+    const newItems = lineItems.map((item: any) => ({
+      ...item,
+      date: { value: "", confidence: 1 },
+      address: { value: "", confidence: 1 },
+      location: { value: "", confidence: 1 },
+      receiver: { value: "", confidence: 1 },
+    }));
+    setLineItems(newItems);
+  };
+
   // Show address column if ANY row has address field OR if we have rows (always show for editing)
   // This allows users to fill in missing addresses even if all rows have "SAKNAS"
   const hasLineAddress = lineItems.length > 0 && (
@@ -270,13 +285,12 @@ export function ReviewForm({
         if (co2Saved) {
           formData.append(`lineItems[${index}].co2Saved`, String(co2Saved));
         }
-        if (address && address !== "SAKNAS") {
-          formData.append(`lineItems[${index}].address`, address);
-          formData.append(`lineItems[${index}].location`, address);
-        }
-        if (receiver) {
-          formData.append(`lineItems[${index}].receiver`, receiver);
-        }
+        // Always send address - use projectAddress fallback if row address is empty/SAKNAS
+        const effectiveAddress = (address && address !== "SAKNAS") ? address : (projectAddress || "");
+        formData.append(`lineItems[${index}].address`, effectiveAddress);
+        formData.append(`lineItems[${index}].location`, effectiveAddress);
+        // Always send receiver (even empty) so clearing works on server side
+        formData.append(`lineItems[${index}].receiver`, receiver || "");
         // ✅ Include row-specific date (critical for export!)
         if (rowDate) {
           formData.append(`lineItems[${index}].date`, rowDate);
@@ -470,14 +484,26 @@ export function ReviewForm({
           <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">
             Specifikation - Material ({lineItems.length} rader)
           </h3>
-                            <button 
-                                type="button"
-            onClick={addLineItem}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
-                            >
-            <Plus className="w-4 h-4" />
-            Lägg till rad
-                            </button>
+          <div className="flex items-center gap-2">
+            <button 
+              type="button"
+              onClick={clearInheritedFields}
+              disabled={lineItems.length === 0}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm bg-amber-500 text-white rounded-md hover:bg-amber-600 transition-colors disabled:opacity-50"
+              title="Töm Datum, Adress och Mottagare för alla rader"
+            >
+              <Eraser className="w-4 h-4" />
+              Töm värden
+            </button>
+            <button 
+              type="button"
+              onClick={addLineItem}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              Lägg till rad
+            </button>
+          </div>
         </div>
 
         {lineItems.length === 0 ? (
@@ -534,11 +560,14 @@ export function ReviewForm({
                   const rowDateValue = typeof item.date === 'object' ? item.date?.value : item.date;
                   // Display date: use row date if available, otherwise show document date
                   const displayDate = rowDateValue || documentDate || "";
+                  // Display address: use row address if available, otherwise fall back to Huvudet projectAddress
+                  const rawAddress = (addressValue || locationValue || '').replace('SAKNAS', '').trim();
+                  const displayAddress = rawAddress || projectAddress || "";
                   
                   const missingMaterial = !materialValue || String(materialValue).trim() === "";
                   const missingWeight = !weightValue || Number(weightValue) === 0;
-                  const missingAddress = (!addressValue || String(addressValue) === "SAKNAS") && 
-                                        (!locationValue || String(locationValue) === "SAKNAS");
+                  // Address is only truly missing if both the row value AND the Huvudet value are empty
+                  const missingAddress = !rawAddress && !projectAddress;
                   const missingReceiver = !receiverValue || String(receiverValue).trim() === "";
                   
                   return (
@@ -623,15 +652,17 @@ export function ReviewForm({
                         <input
                           type="text"
                           name={`lineItems[${index}].address`}
-                          value={(addressValue || locationValue || '').replace('SAKNAS', '')}
+                          value={displayAddress}
                           onChange={(e) => {
                             const val = e.target.value;
                             updateLineItem(index, "address", val);
                             updateLineItem(index, "location", val);
                           }}
                           placeholder={missingAddress ? "SAKNAS - Fyll i adress" : ""}
+                          title={!rawAddress && projectAddress ? "Använder projektadress från Huvud" : ""}
                           className={`w-full text-sm px-2 py-1 border rounded ${
-                            missingAddress ? 'border-yellow-500 bg-yellow-50' : 'border-gray-300'
+                            missingAddress ? 'border-yellow-500 bg-yellow-50' : 
+                            !rawAddress && projectAddress ? 'border-blue-300 bg-blue-50/30' : 'border-gray-300'
                           }`}
                         />
                       </td>
