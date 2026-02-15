@@ -235,9 +235,9 @@ export function DocumentAssistant({ documentId, className }: DocumentAssistantPr
           </Button>
         </div>
 
-        {/* Answer display */}
+        {/* Answer display - scrollable for long responses */}
         {answer && (
-          <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 animate-in fade-in slide-in-from-bottom-2 duration-300 max-h-[400px] overflow-y-auto">
             <FormattedAnswer text={answer} />
           </div>
         )}

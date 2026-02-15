@@ -355,7 +355,7 @@ export default async function ReviewPage({
             </span>
           </div>
 
-          <DocumentAssistant documentId={doc.id} className="max-w-xl" />
+          <DocumentAssistant documentId={doc.id} className="max-w-3xl" />
         </div>
       </div>
 

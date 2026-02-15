@@ -2,12 +2,15 @@
 
 import { useEffect, useState } from "react";
 import * as XLSX from "xlsx";
-import { Loader2, FileSpreadsheet, AlertCircle, Layers } from "lucide-react";
+import { Loader2, FileSpreadsheet, AlertCircle, Layers, RefreshCw } from "lucide-react";
 
 interface SheetData {
   name: string;
   data: any[][];
 }
+
+const MAX_RETRIES = 2;
+const RETRY_DELAY_MS = 2000;
 
 export function ExcelViewer({ url }: { url: string }) {
   const [sheets, setSheets] = useState<SheetData[]>([]);
@@ -15,45 +18,51 @@ export function ExcelViewer({ url }: { url: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function loadExcel() {
-      try {
-        setLoading(true);
-        // 1. Hämta filen från Supabase-URL:en
-        const response = await fetch(url);
-        if (!response.ok) throw new Error("Kunde inte hämta filen");
-        
-        const arrayBuffer = await response.arrayBuffer();
+  const loadExcel = async () => {
+    setLoading(true);
+    setError(null);
 
-        // 2. Tolka med SheetJS
+    let lastError: string = "";
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        if (attempt > 0) {
+          await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+        }
+
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const arrayBuffer = await response.arrayBuffer();
         const workbook = XLSX.read(arrayBuffer);
-        
-        // 3. ✅ FIX: Load ALL sheets, not just the first one!
+
         const allSheets: SheetData[] = [];
-        
         for (const sheetName of workbook.SheetNames) {
           const sheet = workbook.Sheets[sheetName];
           const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
-          
-          // Only include non-empty sheets
           if (jsonData.length > 0) {
-            allSheets.push({
-              name: sheetName,
-              data: jsonData
-            });
+            allSheets.push({ name: sheetName, data: jsonData });
           }
         }
 
         setSheets(allSheets);
         setActiveSheet(0);
-      } catch (err) {
-        console.error(err);
-        setError("Kunde inte läsa Excel-filen.");
-      } finally {
         setLoading(false);
+        return; // Success
+      } catch (err: any) {
+        lastError = err?.message || "Okänt fel";
+        console.error(`[ExcelViewer] Attempt ${attempt + 1}/${MAX_RETRIES + 1} failed:`, lastError);
       }
     }
 
+    // All retries exhausted
+    setError(`Kunde inte läsa Excel-filen (${lastError}).`);
+    setLoading(false);
+  };
+
+  useEffect(() => {
     if (url) loadExcel();
   }, [url]);
 
@@ -68,9 +77,16 @@ export function ExcelViewer({ url }: { url: string }) {
 
   if (error) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-red-400 bg-red-50/50">
-        <AlertCircle className="w-8 h-8 mb-2" />
+      <div className="flex flex-col items-center justify-center h-full text-red-500 bg-red-50/50 py-8 gap-3">
+        <AlertCircle className="w-8 h-8" />
         <p className="text-sm">{error}</p>
+        <button
+          onClick={loadExcel}
+          className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors text-gray-700"
+        >
+          <RefreshCw className="w-3.5 h-3.5" />
+          Försök igen
+        </button>
       </div>
     );
   }

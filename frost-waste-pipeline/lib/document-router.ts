@@ -1,7 +1,6 @@
 // Document Quality Assessment & Routing
-// Uses Gemini 3 Flash via OpenRouter to assess document quality and route to appropriate extractor
-
-import { callGeminiFlashWithVision } from "./ai-clients";
+// Routes PDFs to Mistral OCR, Excel to Gemini Flash
+// Quality assessment is done via hardcoded rules (no API call needed)
 
 export interface QualityAssessment {
   fileType: "pdf" | "xlsx" | "xls" | "csv";
@@ -15,6 +14,11 @@ export interface QualityAssessment {
   reasoning: string;
 }
 
+/**
+ * Assess document quality and determine extraction model.
+ * Uses hardcoded routing: PDFs -> Mistral OCR, Excel -> Gemini Flash.
+ * No API call needed since routing is deterministic by file type.
+ */
 export async function assessDocumentQuality(
   buffer: Buffer,
   filename: string,
@@ -26,73 +30,32 @@ export async function assessDocumentQuality(
     ? "xlsx"
     : "csv";
 
-  // For Excel files, route directly to Gemini (no need for quality assessment)
-  if (fileType !== "pdf") {
-    return {
-      fileType,
-      qualityScore: 0.85,
-      complexity: "MEDIUM",
-      tableCount: 1,
-      hasHandwriting: false,
-      hasMergedCells: true, // Assume true for Excel
-      detectedLanguage: "Swedish",
-      suggestedModel: "gemini-agentic",
-      reasoning: "Excel files route to Gemini 3 Flash with Agentic Vision for merged cell handling",
-    };
-  }
-
-  // For PDFs, do quick assessment
-  const base64 = buffer.toString("base64");
-  
-  const prompt = `Analyze this PDF document for extraction routing. Quick assessment only.
-
-Return JSON (no markdown, no backticks):
-{
-  "qualityScore": 0.0-1.0 (1.0 = perfect scan, 0.0 = illegible),
-  "complexity": "LOW" | "MEDIUM" | "HIGH",
-  "tableCount": number (estimate),
-  "hasHandwriting": boolean,
-  "hasMergedCells": boolean,
-  "detectedLanguage": "Swedish" | "Norwegian" | "Danish" | "Finnish" | "English",
-  "reasoning": "brief explanation"
-}
-
-Assessment criteria:
-- HIGH complexity: 3+ tables, merged cells, handwriting, scanned/low-DPI
-- MEDIUM complexity: 1-2 tables, clean layout, some formatting
-- LOW complexity: Simple text, single table, clear structure`;
-
-  try {
-    const result = await callGeminiFlashWithVision(prompt, base64, "application/pdf");
-    
-    const jsonMatch = result.content.match(/\{[\s\S]*\}/);
-    const assessment = JSON.parse(jsonMatch?.[0] || "{}");
-
+  if (fileType === "pdf") {
     return {
       fileType: "pdf",
-      qualityScore: assessment.qualityScore || 0.7,
-      complexity: assessment.complexity || "MEDIUM",
-      tableCount: assessment.tableCount || 1,
-      hasHandwriting: assessment.hasHandwriting || false,
-      hasMergedCells: assessment.hasMergedCells || false,
-      detectedLanguage: assessment.detectedLanguage || "Swedish",
-      suggestedModel: "mistral-ocr", // ALL PDFs go to Mistral
-      reasoning: assessment.reasoning || "PDF routed to Mistral OCR",
-    };
-  } catch (error) {
-    console.error("[Router] Quality assessment failed, defaulting to Mistral:", error);
-    return {
-      fileType: "pdf",
-      qualityScore: 0.7,
+      qualityScore: 0.8,
       complexity: "MEDIUM",
       tableCount: 1,
       hasHandwriting: false,
       hasMergedCells: false,
       detectedLanguage: "Swedish",
       suggestedModel: "mistral-ocr",
-      reasoning: "Assessment failed, defaulting to Mistral OCR for PDF",
+      reasoning: "PDF routed to Mistral OCR for text extraction",
     };
   }
+
+  // Excel/CSV files route to Gemini
+  return {
+    fileType,
+    qualityScore: 0.85,
+    complexity: "MEDIUM",
+    tableCount: 1,
+    hasHandwriting: false,
+    hasMergedCells: true,
+    detectedLanguage: "Swedish",
+    suggestedModel: "gemini-agentic",
+    reasoning: "Excel files route to Gemini 3 Flash with Agentic Vision for merged cell handling",
+  };
 }
 
 export function routeDocument(assessment: QualityAssessment): "mistral-ocr" | "gemini-agentic" {

@@ -913,12 +913,21 @@ export async function GET(req: Request) {
         : isExcel ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         : "application/octet-stream";
       
-      const result = await processDocument(
-        Buffer.from(arrayBuffer),
-        doc.filename,
-        mimeType,
-        settings
+      // 5-minute timeout to prevent documents stuck in "processing" forever
+      const PROCESSING_TIMEOUT_MS = 5 * 60 * 1000;
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Processing timeout: exceeded 5 minutes")), PROCESSING_TIMEOUT_MS)
       );
+      
+      const result = await Promise.race([
+        processDocument(
+          Buffer.from(arrayBuffer),
+          doc.filename,
+          mimeType,
+          settings
+        ),
+        timeoutPromise
+      ]);
       
       if (!result.success || !result.data) {
         throw new Error(`Multi-model processing failed: ${result.processingLog.slice(-3).join(" | ")}`);
