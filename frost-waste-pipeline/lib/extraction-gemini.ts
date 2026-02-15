@@ -51,7 +51,8 @@ async function extractChunk(
   const chunkTsv = tsvHeader + "\n" + tsvData;
 
   const filenameDate = extractDateFromFilename(filename);
-  const receiver = settings.default_receiver || "Ragn-Sells";
+  // No hardcoded default - extract from document only. Use settings.default_receiver only if explicitly configured.
+  const receiverFallback = settings.default_receiver || "";
   
   const materialSynonyms = settings.material_synonyms 
     ? Object.entries(settings.material_synonyms)
@@ -77,7 +78,7 @@ RULES:
 4. Convert weights to kg (ton × 1000, g ÷ 1000)
 5. Dates as YYYY-MM-DD (Excel serial: days since 1899-12-30)
 6. Default date if missing: ${filenameDate || new Date().toISOString().split("T")[0]}
-7. Default receiver: ${receiver}
+7. RECEIVER: Extract from document content ONLY. If not found in the row/document, leave EMPTY string "". Do NOT guess, infer, or use defaults.
 8. isHazardous = true if hazardous indicator found
 
 CRITICAL: You MUST return exactly ${chunkRows.length} items (one per row in the data above).
@@ -121,7 +122,7 @@ Return JSON array ONLY (no markdown, no explanation):
       co2Saved: { value: Number(item.co2Saved) || 0, confidence: 0.7 },
       isHazardous: { value: Boolean(item.isHazardous), confidence: 0.9 },
       address: { value: item.address || item.location || "", confidence: 0.85 },
-      receiver: { value: item.receiver || receiver, confidence: 0.9 },
+      receiver: { value: (item.receiver && String(item.receiver).trim() !== "") ? item.receiver : (receiverFallback || ""), confidence: (item.receiver && String(item.receiver).trim() !== "") ? 0.9 : 0.5 },
     }));
     
     return items;

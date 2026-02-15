@@ -194,7 +194,7 @@ export async function processDocument(
       date: items[0]?.date || { value: new Date().toISOString().split("T")[0], confidence: 0.5 },
       supplier: { value: "", confidence: 0 },
       address: items[0]?.address || { value: "", confidence: 0 },
-      receiver: items[0]?.receiver || { value: settings.default_receiver || "Ragn-Sells", confidence: 0.9 },
+      receiver: items[0]?.receiver || { value: settings.default_receiver || "", confidence: 0.5 },
       material: { value: "Blandat", confidence: 0.8 },
       weightKg: { 
         value: items.reduce((sum, item) => sum + (item.weightKg?.value || 0), 0), 

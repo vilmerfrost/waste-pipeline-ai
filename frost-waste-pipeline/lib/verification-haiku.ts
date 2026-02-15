@@ -148,8 +148,14 @@ If no issues found, return: {"issues": [], "confidence": 0.95}`;
   const flaggedItems = items.map((item, idx) => {
     const itemIssues = allIssues.filter(i => i.rowIndex === idx);
     if (itemIssues.length > 0) {
+      // Clear hallucinated receiver when verification flags it as error
+      const receiverError = itemIssues.find(i => i.field === "receiver" && i.severity === "error");
+      const clearedReceiver = receiverError && item.receiver?.value
+        ? { ...item.receiver, value: "" }
+        : item.receiver;
       return {
         ...item,
+        receiver: clearedReceiver,
         _verificationIssues: itemIssues,
       };
     }

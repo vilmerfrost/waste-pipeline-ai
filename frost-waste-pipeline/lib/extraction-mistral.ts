@@ -42,7 +42,7 @@ export async function extractWithMistralOCR(
         .join("\n")
     : "";
 
-  const receiver = settings.default_receiver || "Ragn-Sells";
+  const receiverFallback = settings.default_receiver || "";
   const filenameDate = extractDateFromFilename(filename);
 
   try {
@@ -103,7 +103,7 @@ EXTRACTION RULES
 3. Dates as YYYY-MM-DD
 4. If date is a PERIOD (e.g., "2025-01-01 - 2025-01-31"), use END date
 5. If no date in row, use document header date or: ${filenameDate || new Date().toISOString().split("T")[0]}
-6. Default receiver: ${receiver}
+6. RECEIVER: Extract from document content ONLY. If not found in the row/document, leave EMPTY string "". Do NOT guess or use defaults.
 7. isHazardous = true if "Farligt avfall", "FA", "Hazardous" indicated
 
 ${settings.custom_instructions ? `
@@ -178,7 +178,7 @@ OUTPUT FORMAT (JSON only, no markdown, no backticks)
         value: item.location || extracted.documentInfo?.address || "",
         confidence: 0.85,
       },
-      receiver: { value: item.receiver || receiver, confidence: 0.9 },
+      receiver: { value: (item.receiver && String(item.receiver).trim() !== "") ? item.receiver : (receiverFallback || ""), confidence: (item.receiver && String(item.receiver).trim() !== "") ? 0.9 : 0.5 },
     }));
 
     log.push(`[${timestamp()}] ✅ Extracted ${items.length} line items`);
