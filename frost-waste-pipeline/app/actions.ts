@@ -7,6 +7,7 @@ import { WasteRecordSchema } from "@/lib/schemas";
 import * as XLSX from "xlsx";
 import { extractAdaptive } from "@/lib/adaptive-extraction"; 
 import { extractFromImage } from "@/lib/extraction-image";
+import { mergeExtractionResults } from "@/lib/merge-utils";
 
 const STORAGE_BUCKET = "raw_documents";
 
@@ -310,6 +311,7 @@ async function processDocument(documentId: string) {
         ...adaptiveResult,
         totalCostSEK: 0,
         documentType: "waste_report",
+        _originalLineItems: adaptiveResult.lineItems,
       };
 
       // Determine status based on extraction quality
@@ -334,7 +336,10 @@ async function processDocument(documentId: string) {
 
       await supabase.from("documents").update({
         status: "needs_review",
-        extracted_data: imageResult,
+        extracted_data: {
+          ...imageResult,
+          _originalLineItems: imageResult.lineItems,
+        },
         updated_at: new Date().toISOString()
       }).eq("id", documentId);
 
@@ -439,7 +444,8 @@ async function processDocument(documentId: string) {
         status: "needs_review",
         extracted_data: {
           ...validatedData,
-          _processingLog: processingLog  // ✅ Include processing log in saved data
+          _processingLog: processingLog,
+          _originalLineItems: validatedData.lineItems || [],
         }
       }).eq("id", documentId);
       
@@ -527,20 +533,37 @@ export async function reVerifyDocument(documentId: string, customInstructions?: 
         settings
       );
 
-      // Convert to expected format
-      const extractedData = {
-        ...adaptiveResult,
-        totalCostSEK: 0,
-        documentType: "waste_report",
-      };
+      // Merge with current user-edited data
+      const currentData = doc.extracted_data || {};
+      const currentLineItems = currentData.lineItems || [];
+      const originalItems = currentData._originalLineItems || currentLineItems;
+      const mergedLineItems = mergeExtractionResults(currentLineItems, adaptiveResult.lineItems || [], originalItems);
 
-      // Determine status based on extraction quality
+      // Recompute stats from merged line items
+      const getVal = (f: any) => (typeof f === 'object' && f?.value !== undefined) ? f.value : f;
+      const totalWeightKg = mergedLineItems.reduce((sum: number, item: any) => {
+        return sum + (parseFloat(String(getVal(item.weightKg) || 0)) || 0);
+      }, 0);
+      const uniqueAddresses = new Set(mergedLineItems.map((i: any) => getVal(i.location) || getVal(i.address)).filter(Boolean)).size;
+      const uniqueReceivers = new Set(mergedLineItems.map((i: any) => getVal(i.receiver)).filter(Boolean)).size;
+      const uniqueMaterials = new Set(mergedLineItems.map((i: any) => getVal(i.material)).filter(Boolean)).size;
+
       const qualityScore = (adaptiveResult._validation.completeness + (adaptiveResult.metadata?.confidence || 0) * 100) / 2;
       const status = qualityScore >= 90 ? "approved" : "needs_review";
       
       await supabase.from("documents").update({
         status,
-        extracted_data: extractedData,
+        extracted_data: {
+          ...adaptiveResult,
+          totalCostSEK: 0,
+          documentType: "waste_report",
+          lineItems: mergedLineItems,
+          totalWeightKg,
+          uniqueAddresses,
+          uniqueReceivers,
+          uniqueMaterials,
+          _originalLineItems: currentData._originalLineItems || currentLineItems,
+        },
         updated_at: new Date().toISOString()
       }).eq("id", documentId);
 
@@ -558,9 +581,31 @@ export async function reVerifyDocument(documentId: string, customInstructions?: 
 
       const imageResult = await extractFromImage(arrayBuffer, doc.filename, settings);
 
+      // Merge with current user-edited data
+      const currentData = doc.extracted_data || {};
+      const currentLineItems = currentData.lineItems || [];
+      const originalItems = currentData._originalLineItems || currentLineItems;
+      const mergedLineItems = mergeExtractionResults(currentLineItems, imageResult.lineItems || [], originalItems);
+
+      const getVal = (f: any) => (typeof f === 'object' && f?.value !== undefined) ? f.value : f;
+      const totalWeightKg = mergedLineItems.reduce((sum: number, item: any) => {
+        return sum + (parseFloat(String(getVal(item.weightKg) || 0)) || 0);
+      }, 0);
+      const uniqueAddresses = new Set(mergedLineItems.map((i: any) => getVal(i.location) || getVal(i.address)).filter(Boolean)).size;
+      const uniqueReceivers = new Set(mergedLineItems.map((i: any) => getVal(i.receiver)).filter(Boolean)).size;
+      const uniqueMaterials = new Set(mergedLineItems.map((i: any) => getVal(i.material)).filter(Boolean)).size;
+
       await supabase.from("documents").update({
         status: "needs_review",
-        extracted_data: imageResult,
+        extracted_data: {
+          ...imageResult,
+          lineItems: mergedLineItems,
+          totalWeightKg,
+          uniqueAddresses,
+          uniqueReceivers,
+          uniqueMaterials,
+          _originalLineItems: currentData._originalLineItems || currentLineItems,
+        },
         updated_at: new Date().toISOString()
       }).eq("id", documentId);
 
@@ -676,11 +721,45 @@ ${customInstructions ? `
       log(`✅ PDF re-verification complete: ${lineItemCount} line items extracted`);
       log(`${"=".repeat(60)}`);
 
+      // Merge with current user-edited data
+      const currentData = doc.extracted_data || {};
+      const currentLineItems = currentData.lineItems || [];
+      const originalItems = currentData._originalLineItems || currentLineItems;
+      const mergedLineItems = mergeExtractionResults(currentLineItems, validatedData.lineItems || [], originalItems);
+
+      const getVal = (f: any) => (typeof f === 'object' && f?.value !== undefined) ? f.value : f;
+      const totalWeightKg = mergedLineItems.reduce((sum: number, item: any) => {
+        return sum + (parseFloat(String(getVal(item.weightKg) || 0)) || 0);
+      }, 0);
+      const uniqueAddresses = new Set(mergedLineItems.map((i: any) => getVal(i.location) || getVal(i.address)).filter(Boolean)).size;
+      const uniqueReceivers = new Set(mergedLineItems.map((i: any) => getVal(i.receiver)).filter(Boolean)).size;
+      const uniqueMaterials = new Set(mergedLineItems.map((i: any) => getVal(i.material)).filter(Boolean)).size;
+
+      const completeness = mergedLineItems.length > 0 ? 95 : 0;
+      const confidence = validatedData._validation?.confidence || (validatedData as any).metadata?.confidence || 90;
+
       await supabase.from("documents").update({
         status: "needs_review",
         extracted_data: {
           ...validatedData,
-          _processingLog: processingLog  // ✅ Include processing log in saved data
+          _processingLog: processingLog,
+          lineItems: mergedLineItems,
+          totalWeightKg,
+          uniqueAddresses,
+          uniqueReceivers,
+          uniqueMaterials,
+          _validation: {
+            ...(validatedData._validation || {}),
+            completeness,
+            confidence,
+          },
+          metadata: {
+            ...((validatedData as any).metadata || {}),
+            totalRows: mergedLineItems.length,
+            extractedRows: mergedLineItems.length,
+            confidence,
+          },
+          _originalLineItems: currentData._originalLineItems || currentLineItems,
         }
       }).eq("id", documentId);
       

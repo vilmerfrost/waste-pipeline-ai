@@ -116,10 +116,21 @@ export async function GET(request: Request) {
         // Upload to Supabase storage
         const sanitizedName = sanitizeFilename(fileInfo.name);
         const storagePath = `azure-auto-fetch/${Date.now()}-${sanitizedName}`;
+        const ext = fileInfo.name.split('.').pop()?.toLowerCase();
+        const contentTypeMap: Record<string, string> = {
+          pdf: "application/pdf",
+          xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          xls: "application/vnd.ms-excel",
+          csv: "text/csv",
+          png: "image/png",
+          jpg: "image/jpeg",
+          jpeg: "image/jpeg",
+        };
+        const detectedContentType = (ext && contentTypeMap[ext]) || fileInfo.content_type || "application/octet-stream";
         const { error: uploadError } = await supabasedbclient.storage
           .from("raw_documents")
           .upload(storagePath, buffer, {
-            contentType: fileInfo.content_type || "application/pdf",
+            contentType: detectedContentType,
             upsert: false,
           });
 
@@ -137,7 +148,7 @@ export async function GET(request: Request) {
             status: "uploaded",
             storage_path: storagePath,
             azure_original_filename: fileInfo.full_path, // Track FULL blob path for safe cleanup (includes folder!)
-            source_container: fileInfo.source_folder || (fileInfo.name.endsWith('.pdf') ? 'unsupported-file-format' : 'unable-to-process'), // Track source container
+            source_container: fileInfo.source_folder || 'unable-to-process', // Track source container
             extracted_data: {
               source: "azure_auto_fetch",
               original_blob_path: fileInfo.full_path,

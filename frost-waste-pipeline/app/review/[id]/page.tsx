@@ -351,7 +351,7 @@ export default async function ReviewPage({
               <ModelBadge modelPath={extractedData.metadata.model} />
             )}
             <span className="text-sm text-gray-500">
-              Confidence: {((extractedData?.metadata?.confidence || 0) * 100).toFixed(0)}%
+              Confidence: {((extractedData?.metadata?.confidence || extractedData?._validation?.confidence || 0) * 100).toFixed(0)}%
             </span>
           </div>
 
@@ -577,7 +577,7 @@ export default async function ReviewPage({
                 validation.completeness >= 80 ? 'text-yellow-600' :
                 'text-red-600'
               }`}>
-                {validation.completeness?.toFixed(0) || 100}%
+                {(validation.completeness ?? 100).toFixed(0)}%
               </div>
             </div>
           )}
