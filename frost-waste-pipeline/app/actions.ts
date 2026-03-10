@@ -6,6 +6,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { WasteRecordSchema } from "@/lib/schemas";
 import * as XLSX from "xlsx";
 import { extractAdaptive } from "@/lib/adaptive-extraction"; 
+import { extractFromImage } from "@/lib/extraction-image";
 
 const STORAGE_BUCKET = "raw_documents";
 
@@ -173,9 +174,9 @@ export async function uploadAndEnqueueDocument(formData: FormData) {
     
     // Validate file extension
     const fileExtension = file.name.split(".").pop()?.toLowerCase();
-    const allowedExtensions = ["pdf", "xlsx", "xls"];
+    const allowedExtensions = ["pdf", "xlsx", "xls", "csv", "png", "jpg", "jpeg"];
     if (!fileExtension || !allowedExtensions.includes(fileExtension)) {
-      throw new Error(`Filtypen "${fileExtension || 'okänd'}" stöds inte. Endast PDF och Excel (.xlsx, .xls) är tillåtna.`);
+      throw new Error(`Filtypen "${fileExtension || 'okänd'}" stöds inte. Endast PDF, Excel (.xlsx, .xls), CSV och bilder (PNG, JPG) är tillåtna.`);
     }
     
     // Generate storage path
@@ -259,8 +260,8 @@ async function processDocument(documentId: string) {
     let calculatedTotals = { weight: 0, cost: 0, co2: 0, hazardousCount: 0 };
     let isBigFile = false;
 
-    if (doc.filename.endsWith(".xlsx") || doc.filename.endsWith(".xls")) {
-      // EXCEL: Use adaptive extraction for ALL rows from ALL sheets
+    if (doc.filename.endsWith(".xlsx") || doc.filename.endsWith(".xls") || doc.filename.endsWith(".csv")) {
+      // EXCEL/CSV: Use adaptive extraction for ALL rows from ALL sheets
       const workbook = XLSX.read(arrayBuffer);
       
       // ✅ FIX: Process ALL sheets, not just the first one!
@@ -318,6 +319,22 @@ async function processDocument(documentId: string) {
       await supabase.from("documents").update({
         status,
         extracted_data: extractedData,
+        updated_at: new Date().toISOString()
+      }).eq("id", documentId);
+
+      revalidatePath("/");
+      return;
+
+    } else if (doc.filename.endsWith(".png") || doc.filename.endsWith(".jpg") || doc.filename.endsWith(".jpeg")) {
+      // IMAGE: Use Gemini Flash Vision for OCR extraction
+      const { data: settingsData } = await supabase.from("settings").select("*").single();
+      const settings = settingsData || {};
+
+      const imageResult = await extractFromImage(arrayBuffer, doc.filename, settings);
+
+      await supabase.from("documents").update({
+        status: "needs_review",
+        extracted_data: imageResult,
         updated_at: new Date().toISOString()
       }).eq("id", documentId);
 
@@ -461,8 +478,8 @@ export async function reVerifyDocument(documentId: string, customInstructions?: 
     let calculatedTotals = { weight: 0, cost: 0, co2: 0, hazardousCount: 0 };
     let isBigFile = false;
 
-    if (doc.filename.endsWith(".xlsx") || doc.filename.endsWith(".xls")) {
-      // EXCEL: Use adaptive extraction for ALL rows from ALL sheets (re-verify)
+    if (doc.filename.endsWith(".xlsx") || doc.filename.endsWith(".xls") || doc.filename.endsWith(".csv")) {
+      // EXCEL/CSV: Use adaptive extraction for ALL rows from ALL sheets (re-verify)
       const workbook = XLSX.read(arrayBuffer);
       
       // ✅ FIX: Process ALL sheets, not just the first one!
@@ -524,6 +541,26 @@ export async function reVerifyDocument(documentId: string, customInstructions?: 
       await supabase.from("documents").update({
         status,
         extracted_data: extractedData,
+        updated_at: new Date().toISOString()
+      }).eq("id", documentId);
+
+      revalidatePath(`/review/${documentId}`);
+      revalidatePath("/");
+      return;
+
+    } else if (doc.filename.endsWith(".png") || doc.filename.endsWith(".jpg") || doc.filename.endsWith(".jpeg")) {
+      // IMAGE: Use Gemini Flash Vision for OCR re-verification
+      const { data: settingsData } = await supabase.from("settings").select("*").single();
+      const settings = {
+        ...(settingsData || {}),
+        custom_instructions: customInstructions || settingsData?.custom_instructions,
+      };
+
+      const imageResult = await extractFromImage(arrayBuffer, doc.filename, settings);
+
+      await supabase.from("documents").update({
+        status: "needs_review",
+        extracted_data: imageResult,
         updated_at: new Date().toISOString()
       }).eq("id", documentId);
 

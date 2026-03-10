@@ -4,6 +4,7 @@ import * as XLSX from "xlsx";
 import { extractAdaptive } from "@/lib/adaptive-extraction";
 import { processDocument } from "@/lib/document-processor";
 import { getAnthropic } from "@/lib/ai-clients";
+import { extractFromImage } from "@/lib/extraction-image";
 
 // ============================================================================
 // DATE EXTRACTION HELPERS
@@ -894,8 +895,9 @@ export async function GET(req: Request) {
     }
     
     // Check file type
-    const isExcel = doc.filename.match(/\.(xlsx|xls)$/i);
+    const isExcel = doc.filename.match(/\.(xlsx|xls|csv)$/i);
     const isPDF = doc.filename.match(/\.pdf$/i);
+    const isImage = doc.filename.match(/\.(png|jpg|jpeg)$/i);
     
     let extractedData: any;
     let newStatus: "approved" | "needs_review" | "error";
@@ -911,6 +913,7 @@ export async function GET(req: Request) {
       
       const mimeType = isPDF ? "application/pdf" 
         : isExcel ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        : isImage ? (doc.filename.match(/\.png$/i) ? "image/png" : "image/jpeg")
         : "application/octet-stream";
       
       // 5-minute timeout to prevent documents stuck in "processing" forever
@@ -1044,8 +1047,16 @@ export async function GET(req: Request) {
         doc.filename,
         settings
       );
+    } else if (isImage) {
+      console.log("🖼️ Image file detected - using Gemini Flash Vision");
+      
+      extractedData = await extractFromImage(
+        arrayBuffer,
+        doc.filename,
+        settings
+      );
     } else {
-      throw new Error(`Unsupported file type: ${doc.filename}. Only Excel (.xlsx, .xls) and PDF (.pdf) are supported.`);
+      throw new Error(`Unsupported file type: ${doc.filename}. Only Excel (.xlsx, .xls), CSV (.csv) and PDF (.pdf) are supported.`);
     }
     
     // Generate AI summary

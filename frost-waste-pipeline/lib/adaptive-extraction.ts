@@ -583,7 +583,7 @@ OUTPUT FORMAT (JSON only, no markdown):
 }`;
 
   try {
-    const response = await anthropic.messages.create({
+    const response = await getAnthropic().messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 4096,
       temperature: 0,

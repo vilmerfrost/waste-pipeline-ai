@@ -98,10 +98,10 @@ export async function GET(req: Request) {
         onLog(`✓ File downloaded (${(arrayBuffer.byteLength / 1024).toFixed(0)} KB)`, 'success');
         
         // Check file type
-        const isExcel = doc.filename.match(/\.(xlsx|xls)$/i);
+        const isExcel = doc.filename.match(/\.(xlsx|xls|csv)$/i);
         
         if (!isExcel) {
-          send('error', { message: 'Streaming only supported for Excel files' });
+          send('error', { message: 'Streaming only supported for Excel and CSV files' });
           controller.close();
           return;
         }

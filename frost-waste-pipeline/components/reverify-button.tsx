@@ -1,11 +1,14 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { reVerifyDocument } from "@/app/actions";
-import { Sparkles, Loader2, Send, X } from "lucide-react";
+import { Sparkles, Loader2, Send, X, CheckCircle2 } from "lucide-react";
 
 export function ReverifyButton({ docId }: { docId: string }) {
+  const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
+  const [isDone, setIsDone] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [customInstructions, setCustomInstructions] = useState("");
   const modalRef = useRef<HTMLDivElement>(null);
@@ -25,11 +28,14 @@ export function ReverifyButton({ docId }: { docId: string }) {
     setIsLoading(true);
     try {
       await reVerifyDocument(docId, customInstructions.trim() || undefined);
+      setIsModalOpen(false);
+      setIsDone(true);
+      router.refresh();
+      setTimeout(() => setIsDone(false), 3000);
     } catch (error) {
       alert("Kunde inte dubbelkolla. Försök igen.");
     } finally {
       setIsLoading(false);
-      setIsModalOpen(false);
     }
   };
 
@@ -52,6 +58,11 @@ export function ReverifyButton({ docId }: { docId: string }) {
           <>
             <Loader2 className="w-4 h-4 animate-spin" />
             <span>Dubbelkollar...</span>
+          </>
+        ) : isDone ? (
+          <>
+            <CheckCircle2 className="w-4 h-4 text-green-500" />
+            <span className="text-green-700">Klar!</span>
           </>
         ) : (
           <>

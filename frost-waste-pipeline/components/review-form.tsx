@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { SmartInput } from "@/components/smart-input";
 import { saveDocument } from "@/app/actions";
-import { ArrowRight, Save, Skull, Plus, Trash2, AlertTriangle, Eraser } from "lucide-react";
+import { ArrowRight, Save, Skull, Plus, Trash2, AlertTriangle, Eraser, CheckSquare } from "lucide-react";
 import { useUnsavedChanges } from "@/hooks/use-unsaved-changes";
 
 export function ReviewForm({
@@ -31,6 +31,9 @@ export function ReviewForm({
   
   // Track if form has been modified
   const [hasBeenModified, setHasBeenModified] = useState(false);
+
+  // Multi-row selection state
+  const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
 
   // Pre-fill metadata from AI extraction when component loads
   useEffect(() => {
@@ -227,6 +230,34 @@ export function ReviewForm({
       receiver: { value: "", confidence: 1 },
     }));
     setLineItems(newItems);
+  };
+
+  // Delete all selected rows
+  const deleteSelectedRows = () => {
+    if (selectedRows.size === 0) return;
+    setHasBeenModified(true);
+    const newItems = lineItems.filter((_: any, i: number) => !selectedRows.has(i));
+    setLineItems(newItems);
+    setSelectedRows(new Set());
+  };
+
+  // Toggle single row selection
+  const toggleRowSelection = (index: number) => {
+    setSelectedRows(prev => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  };
+
+  // Toggle select all rows
+  const toggleSelectAll = () => {
+    if (selectedRows.size === lineItems.length) {
+      setSelectedRows(new Set());
+    } else {
+      setSelectedRows(new Set(lineItems.map((_: any, i: number) => i)));
+    }
   };
 
   // Show address column if ANY row has address field OR if we have rows (always show for editing)
@@ -512,9 +543,39 @@ export function ReviewForm({
           </div>
         ) : (
           <div className="overflow-x-auto">
+            {selectedRows.size > 0 && (
+              <div className="flex items-center gap-3 mb-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg">
+                <CheckSquare className="w-4 h-4 text-blue-600" />
+                <span className="text-sm font-medium text-blue-700">{selectedRows.size} rader valda</span>
+                <button
+                  type="button"
+                  onClick={deleteSelectedRows}
+                  className="flex items-center gap-1.5 px-3 py-1 text-sm bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Ta bort valda
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedRows(new Set())}
+                  className="px-3 py-1 text-sm bg-white border border-blue-300 text-blue-700 rounded-md hover:bg-blue-50 transition-colors"
+                >
+                  Avmarkera alla
+                </button>
+              </div>
+            )}
             <table className="w-full border-collapse">
               <thead>
                 <tr className="border-b-2 border-gray-200">
+                  <th className="w-8 py-2 px-2">
+                    <input
+                      type="checkbox"
+                      checked={lineItems.length > 0 && selectedRows.size === lineItems.length}
+                      onChange={toggleSelectAll}
+                      className="w-4 h-4"
+                      title="Välj alla"
+                    />
+                  </th>
                   <th className="text-left text-xs font-semibold text-gray-600 uppercase py-2 px-2">
                     Material
                   </th>
@@ -574,9 +635,18 @@ export function ReviewForm({
                   <tr 
                     key={index} 
                     className={`border-b border-gray-100 hover:bg-gray-50 ${
+                      selectedRows.has(index) ? 'bg-blue-50' :
                       missingMaterial || missingWeight ? 'bg-red-50' : ''
                     }`}
                   >
+                    <td className="py-2 px-2">
+                      <input
+                        type="checkbox"
+                        checked={selectedRows.has(index)}
+                        onChange={() => toggleRowSelection(index)}
+                        className="w-4 h-4"
+                      />
+                    </td>
                     <td className="py-2 px-2">
                       <input
                         type="text"

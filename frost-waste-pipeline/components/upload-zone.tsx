@@ -23,6 +23,9 @@ const ALLOWED_TYPES: Record<string, string> = {
   "application/pdf": "PDF",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "Excel (.xlsx)",
   "application/vnd.ms-excel": "Excel (.xls)",
+  "text/csv": "CSV",
+  "image/png": "PNG",
+  "image/jpeg": "JPG/JPEG",
 };
 
 /**
@@ -40,10 +43,10 @@ function validateFile(file: File): string | null {
   if (!Object.keys(ALLOWED_TYPES).includes(file.type)) {
     const ext = file.name.split('.').pop()?.toLowerCase();
     // Also check by extension as a fallback (some systems report wrong MIME)
-    if (ext === 'pdf' || ext === 'xlsx' || ext === 'xls') {
+    if (ext === 'pdf' || ext === 'xlsx' || ext === 'xls' || ext === 'csv' || ext === 'png' || ext === 'jpg' || ext === 'jpeg') {
       return null; // Allow by extension
     }
-    return `Filtypen "${file.type || ext || 'okänd'}" stöds inte. Endast PDF och Excel (.xlsx) är tillåtna.`;
+    return `Filtypen "${file.type || ext || 'okänd'}" stöds inte. Endast PDF, Excel (.xlsx), CSV och bilder (PNG, JPG) är tillåtna.`;
   }
   
   // Check filename for problematic characters
@@ -114,8 +117,8 @@ export function UploadZone() {
         const err = rejection.errors[0];
         if (err.code === 'file-too-large') {
           errorMsg = `Filen är för stor. Max storlek är 50 MB.`;
-        } else if (err.code === 'file-invalid-type') {
-          errorMsg = `Filtypen stöds inte. Endast PDF och Excel (.xlsx) är tillåtna.`;
+        } else       if (err.code === 'file-invalid-type') {
+          errorMsg = `Filtypen stöds inte. Endast PDF, Excel (.xlsx), CSV och bilder (PNG, JPG) är tillåtna.`;
         } else {
           errorMsg = err.message || "Filen avvisades";
         }
@@ -190,6 +193,9 @@ export function UploadZone() {
       "application/pdf": [".pdf"],
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
       "application/vnd.ms-excel": [".xls"],
+      "text/csv": [".csv"],
+      "image/png": [".png"],
+      "image/jpeg": [".jpg", ".jpeg"],
     },
     maxFiles: 0, // 0 betyder obegränsat antal filer!
     maxSize: MAX_FILE_SIZE, // 50 MB max
@@ -202,7 +208,8 @@ export function UploadZone() {
     if (status === "error") return <XCircle className="w-5 h-5 text-red-500" />;
     
     // Default fil-ikon baserat på typ
-    if (fileName.endsWith(".xlsx")) return <FileSpreadsheet className="w-5 h-5 text-green-600" />;
+    if (fileName.endsWith(".xlsx") || fileName.endsWith(".xls") || fileName.endsWith(".csv")) return <FileSpreadsheet className="w-5 h-5 text-green-600" />;
+    if (fileName.endsWith(".png") || fileName.endsWith(".jpg") || fileName.endsWith(".jpeg")) return <FileText className="w-5 h-5 text-purple-500" />;
     return <FileText className="w-5 h-5 text-slate-400" />;
   };
 
@@ -231,7 +238,7 @@ export function UploadZone() {
             {isDragActive ? "Släpp filerna här..." : "Dra och släpp filer"}
           </p>
           <p className="text-sm text-slate-400 font-light">
-             PDF eller Excel • Obegränsat antal
+             PDF, Excel, CSV eller bild (PNG/JPG) • Obegränsat antal
           </p>
         </div>
       </div>
