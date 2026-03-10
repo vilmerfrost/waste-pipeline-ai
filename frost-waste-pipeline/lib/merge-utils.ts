@@ -9,7 +9,7 @@ function getFieldValue(f: any): string {
   return String(f);
 }
 
-function rowKey(item: any): string {
+export function rowKey(item: any): string {
   return [
     getFieldValue(item.date),
     getFieldValue(item.location) || getFieldValue(item.address),
@@ -76,4 +76,14 @@ export function mergeExtractionResults(
   }
 
   return merged;
+}
+
+/**
+ * Fallback for old documents without _originalLineItems.
+ * Preserves user's current state, only appends genuinely new rows (by rowKey).
+ */
+export function appendNewRowsOnly(currentItems: any[], newItems: any[]): any[] {
+  const currentKeys = new Set(currentItems.map((item) => rowKey(item)));
+  const newRows = newItems.filter((item) => !currentKeys.has(rowKey(item)));
+  return [...currentItems, ...newRows];
 }

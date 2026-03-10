@@ -7,7 +7,7 @@ import { WasteRecordSchema } from "@/lib/schemas";
 import * as XLSX from "xlsx";
 import { extractAdaptive } from "@/lib/adaptive-extraction"; 
 import { extractFromImage } from "@/lib/extraction-image";
-import { mergeExtractionResults } from "@/lib/merge-utils";
+import { mergeExtractionResults, appendNewRowsOnly } from "@/lib/merge-utils";
 
 const STORAGE_BUCKET = "raw_documents";
 
@@ -536,8 +536,14 @@ export async function reVerifyDocument(documentId: string, customInstructions?: 
       // Merge with current user-edited data
       const currentData = doc.extracted_data || {};
       const currentLineItems = currentData.lineItems || [];
-      const originalItems = currentData._originalLineItems || currentLineItems;
-      const mergedLineItems = mergeExtractionResults(currentLineItems, adaptiveResult.lineItems || [], originalItems);
+      const originalItems = currentData._originalLineItems;
+
+      let mergedLineItems: any[];
+      if (originalItems) {
+        mergedLineItems = mergeExtractionResults(currentLineItems, adaptiveResult.lineItems || [], originalItems);
+      } else {
+        mergedLineItems = appendNewRowsOnly(currentLineItems, adaptiveResult.lineItems || []);
+      }
 
       // Recompute stats from merged line items
       const getVal = (f: any) => (typeof f === 'object' && f?.value !== undefined) ? f.value : f;
@@ -562,13 +568,28 @@ export async function reVerifyDocument(documentId: string, customInstructions?: 
           uniqueAddresses,
           uniqueReceivers,
           uniqueMaterials,
+          _validation: {
+            ...(adaptiveResult._validation || {}),
+            completeness: adaptiveResult._validation?.completeness ?? (mergedLineItems.length > 0 ? 95 : 0),
+            confidence: adaptiveResult._validation?.confidence ?? (adaptiveResult.metadata?.confidence || 90),
+          },
+          metadata: {
+            ...(adaptiveResult.metadata || {}),
+            totalRows: mergedLineItems.length,
+            extractedRows: mergedLineItems.length,
+          },
           _originalLineItems: currentData._originalLineItems || currentLineItems,
+          _processingLog: [
+            ...((currentData._processingLog as string[]) || []),
+            `[${new Date().toISOString().split('T')[1].split('.')[0]}] 🔄 Dubbelkoll genomförd — ${mergedLineItems.length} rader efter merge`,
+          ],
         },
         updated_at: new Date().toISOString()
       }).eq("id", documentId);
 
       revalidatePath(`/review/${documentId}`);
       revalidatePath("/");
+      revalidatePath("/collecct");
       return;
 
     } else if (doc.filename.endsWith(".png") || doc.filename.endsWith(".jpg") || doc.filename.endsWith(".jpeg")) {
@@ -584,8 +605,14 @@ export async function reVerifyDocument(documentId: string, customInstructions?: 
       // Merge with current user-edited data
       const currentData = doc.extracted_data || {};
       const currentLineItems = currentData.lineItems || [];
-      const originalItems = currentData._originalLineItems || currentLineItems;
-      const mergedLineItems = mergeExtractionResults(currentLineItems, imageResult.lineItems || [], originalItems);
+      const originalItems = currentData._originalLineItems;
+
+      let mergedLineItems: any[];
+      if (originalItems) {
+        mergedLineItems = mergeExtractionResults(currentLineItems, imageResult.lineItems || [], originalItems);
+      } else {
+        mergedLineItems = appendNewRowsOnly(currentLineItems, imageResult.lineItems || []);
+      }
 
       const getVal = (f: any) => (typeof f === 'object' && f?.value !== undefined) ? f.value : f;
       const totalWeightKg = mergedLineItems.reduce((sum: number, item: any) => {
@@ -605,12 +632,17 @@ export async function reVerifyDocument(documentId: string, customInstructions?: 
           uniqueReceivers,
           uniqueMaterials,
           _originalLineItems: currentData._originalLineItems || currentLineItems,
+          _processingLog: [
+            ...((currentData._processingLog as string[]) || []),
+            `[${new Date().toISOString().split('T')[1].split('.')[0]}] 🔄 Dubbelkoll genomförd — ${mergedLineItems.length} rader efter merge`,
+          ],
         },
         updated_at: new Date().toISOString()
       }).eq("id", documentId);
 
       revalidatePath(`/review/${documentId}`);
       revalidatePath("/");
+      revalidatePath("/collecct");
       return;
 
     } else {
@@ -724,8 +756,14 @@ ${customInstructions ? `
       // Merge with current user-edited data
       const currentData = doc.extracted_data || {};
       const currentLineItems = currentData.lineItems || [];
-      const originalItems = currentData._originalLineItems || currentLineItems;
-      const mergedLineItems = mergeExtractionResults(currentLineItems, validatedData.lineItems || [], originalItems);
+      const originalItems = currentData._originalLineItems;
+
+      let mergedLineItems: any[];
+      if (originalItems) {
+        mergedLineItems = mergeExtractionResults(currentLineItems, validatedData.lineItems || [], originalItems);
+      } else {
+        mergedLineItems = appendNewRowsOnly(currentLineItems, validatedData.lineItems || []);
+      }
 
       const getVal = (f: any) => (typeof f === 'object' && f?.value !== undefined) ? f.value : f;
       const totalWeightKg = mergedLineItems.reduce((sum: number, item: any) => {
@@ -736,20 +774,20 @@ ${customInstructions ? `
       const uniqueMaterials = new Set(mergedLineItems.map((i: any) => getVal(i.material)).filter(Boolean)).size;
 
       const completeness = mergedLineItems.length > 0 ? 95 : 0;
-      const confidence = validatedData._validation?.confidence || (validatedData as any).metadata?.confidence || 90;
+      const vData = validatedData as any;
+      const confidence = vData._validation?.confidence || vData.metadata?.confidence || 90;
 
       await supabase.from("documents").update({
         status: "needs_review",
         extracted_data: {
           ...validatedData,
-          _processingLog: processingLog,
           lineItems: mergedLineItems,
           totalWeightKg,
           uniqueAddresses,
           uniqueReceivers,
           uniqueMaterials,
           _validation: {
-            ...(validatedData._validation || {}),
+            ...(vData._validation || {}),
             completeness,
             confidence,
           },
@@ -760,11 +798,17 @@ ${customInstructions ? `
             confidence,
           },
           _originalLineItems: currentData._originalLineItems || currentLineItems,
+          _processingLog: [
+            ...((currentData._processingLog as string[]) || []),
+            ...processingLog,
+            `[${new Date().toISOString().split('T')[1].split('.')[0]}] 🔄 Dubbelkoll genomförd — ${mergedLineItems.length} rader efter merge`,
+          ],
         }
       }).eq("id", documentId);
       
       revalidatePath(`/review/${documentId}`);
       revalidatePath("/");
+      revalidatePath("/collecct");
       return;
     }
 

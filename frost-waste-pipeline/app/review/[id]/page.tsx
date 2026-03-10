@@ -632,6 +632,7 @@ export default async function ReviewPage({
         {/* Right: Review Form */}
         <div className="mb-6">
           <ReviewForm
+            key={doc.updated_at}
             initialData={extractedData}
             documentId={doc.id}
             nextDocId={nextDocId}
