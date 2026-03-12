@@ -75,6 +75,12 @@ export async function GET(req: Request) {
       contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
     } else if (lower.endsWith(".xls")) {
       contentType = "application/vnd.ms-excel";
+    } else if (lower.endsWith(".csv")) {
+      contentType = "text/csv";
+    } else if (lower.endsWith(".png")) {
+      contentType = "image/png";
+    } else if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
+      contentType = "image/jpeg";
     }
 
     return new NextResponse(arrayBuffer, {

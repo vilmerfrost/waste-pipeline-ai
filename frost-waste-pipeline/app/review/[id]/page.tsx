@@ -59,7 +59,9 @@ export default async function ReviewPage({
   // Use preview endpoint to ensure inline display and avoid downloads
   const previewUrl = `/api/preview-file?id=${doc.id}`;
   const isExcel = doc.filename.toLowerCase().endsWith(".xlsx") || 
-                  doc.filename.toLowerCase().endsWith(".xls");
+                  doc.filename.toLowerCase().endsWith(".xls") ||
+                  doc.filename.toLowerCase().endsWith(".csv");
+  const isImage = doc.filename.toLowerCase().match(/\.(png|jpg|jpeg)$/);
 
   const extractedData = doc.extracted_data || {};
   const lineItems = extractedData.lineItems || [];
@@ -506,6 +508,12 @@ export default async function ReviewPage({
             {previewUrl ? (
               isExcel ? (
                 <ExcelViewer url={previewUrl} />
+              ) : isImage ? (
+                <img
+                  src={previewUrl}
+                  alt={doc.filename}
+                  className="w-full max-h-[700px] object-contain rounded border border-gray-200"
+                />
               ) : (
                 <object
                   data={previewUrl}

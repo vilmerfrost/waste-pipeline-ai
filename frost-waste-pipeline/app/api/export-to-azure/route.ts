@@ -4,7 +4,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceRoleClient } from "@/lib/supabase";
 import ExcelJS from "exceljs";
-import { BlobServiceClient } from "@azure/storage-blob";
+import { BlobServiceClient, generateBlobSASQueryParameters, BlobSASPermissions, StorageSharedKeyCredential } from "@azure/storage-blob";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300; // 5 minutes max
@@ -251,14 +251,11 @@ async function createExcelForDocument(doc: any): Promise<Buffer> {
   return await workbook.xlsx.writeBuffer() as Buffer;
 }
 
-// Get original filename (convert .pdf to .xlsx if needed)
+// Get original filename (convert non-xlsx to .xlsx since export is always Excel)
 function getExportFilename(originalFilename: string): string {
-  // If it's a PDF, change extension to .xlsx
-  if (originalFilename.endsWith('.pdf')) {
-    return originalFilename.replace(/\.pdf$/i, '.xlsx');
+  if (originalFilename.match(/\.(pdf|csv|png|jpg|jpeg)$/i)) {
+    return originalFilename.replace(/\.(pdf|csv|png|jpg|jpeg)$/i, '.xlsx');
   }
-  
-  // If it's already .xlsx or .xls, keep as is
   return originalFilename;
 }
 
@@ -320,6 +317,13 @@ export async function POST(request: NextRequest) {
     
     const blobServiceClient = BlobServiceClient.fromConnectionString(connectionString);
     const containerClient = blobServiceClient.getContainerClient(outputContainer);
+
+    // Parse account name + key from connection string for SAS generation
+    const accountName = connectionString.match(/AccountName=([^;]+)/)?.[1] || "";
+    const accountKey = connectionString.match(/AccountKey=([^;]+)/)?.[1] || "";
+    const sharedKeyCredential = accountName && accountKey
+      ? new StorageSharedKeyCredential(accountName, accountKey)
+      : null;
     
     // Ensure container exists
     await containerClient.createIfNotExists();
@@ -373,6 +377,18 @@ export async function POST(request: NextRequest) {
           // Don't fail export if cleanup fails - better to leave file than delete wrong one
         }
         
+        // Generate a read-only SAS URL valid for 90 days
+        let exportUrl = blockBlobClient.url;
+        if (sharedKeyCredential) {
+          const sasToken = generateBlobSASQueryParameters({
+            containerName: outputContainer,
+            blobName: blobPath,
+            permissions: BlobSASPermissions.parse("r"),
+            expiresOn: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+          }, sharedKeyCredential).toString();
+          exportUrl = `${blockBlobClient.url}?${sasToken}`;
+        }
+
         // Mark as exported
         const exportedAt = new Date().toISOString();
         
@@ -383,7 +399,7 @@ export async function POST(request: NextRequest) {
             status: "exported",
             extracted_data: {
               ...doc.extracted_data,
-              azure_export_url: blockBlobClient.url,
+              azure_export_url: exportUrl,
               exported_at: exportedAt
             }
           })
