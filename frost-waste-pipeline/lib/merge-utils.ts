@@ -9,12 +9,27 @@ function getFieldValue(f: any): string {
   return String(f);
 }
 
+/** Normalize a value for fuzzy row matching — lowercase, trim, normalize dates */
+function normalizeForKey(val: string): string {
+  let v = val.trim().toLowerCase();
+  // Normalize date formats: "2025-9-18" → "2025-09-18", "18/09/2025" → "2025-09-18"
+  const isoish = v.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (isoish) {
+    v = `${isoish[1]}-${isoish[2].padStart(2, '0')}-${isoish[3].padStart(2, '0')}`;
+  }
+  const euDate = v.match(/^(\d{1,2})[/.](\d{1,2})[/.](\d{4})$/);
+  if (euDate) {
+    v = `${euDate[3]}-${euDate[2].padStart(2, '0')}-${euDate[1].padStart(2, '0')}`;
+  }
+  return v;
+}
+
 export function rowKey(item: any): string {
   return [
-    getFieldValue(item.date),
-    getFieldValue(item.location) || getFieldValue(item.address),
-    getFieldValue(item.material),
-    getFieldValue(item.receiver),
+    normalizeForKey(getFieldValue(item.date)),
+    normalizeForKey(getFieldValue(item.location) || getFieldValue(item.address)),
+    normalizeForKey(getFieldValue(item.material)),
+    normalizeForKey(getFieldValue(item.receiver)),
   ].join('|');
 }
 

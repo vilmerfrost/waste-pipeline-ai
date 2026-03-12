@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { AzureBlobConnector } from "@/lib/azure-blob-connector";
 import { createServiceRoleClient } from "@/lib/supabase";
-import { uploadAndEnqueueDocument } from "@/app/actions";
+import { uploadAndEnqueueDocument, processDocument } from "@/app/actions";
 import { sanitizeFilename } from "@/lib/sanitize-filename";
 
 export const dynamic = "force-dynamic";
@@ -138,6 +138,13 @@ export async function POST() {
           document_id: doc.id,
           status: "queued",
         });
+
+        // Actually trigger document processing
+        try {
+          await processDocument(doc.id);
+        } catch (processError: any) {
+          console.error(`⚠️ Workflow sync: Processing failed for ${fileInfo.name}: ${processError.message}`);
+        }
 
         results.processed++;
         results.files.push({

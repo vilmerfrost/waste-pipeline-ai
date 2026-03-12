@@ -7,6 +7,7 @@
 import { NextResponse } from "next/server";
 import { AzureBlobConnector } from "@/lib/azure-blob-connector";
 import { createServiceRoleClient } from "@/lib/supabase";
+import { processDocument } from "@/app/actions";
 import { sanitizeFilename } from "@/lib/sanitize-filename";
 
 export const dynamic = "force-dynamic";
@@ -156,7 +157,13 @@ export async function POST() {
           status: "queued",
         });
 
-        console.log(`✅ Manual auto-fetch: Queued ${fileInfo.name} for processing (doc: ${doc.id})`);
+        // Actually trigger document processing
+        try {
+          await processDocument(doc.id);
+          console.log(`✅ Manual auto-fetch: Processed ${fileInfo.name} (doc: ${doc.id})`);
+        } catch (processError: any) {
+          console.error(`⚠️ Manual auto-fetch: Processing failed for ${fileInfo.name}: ${processError.message}`);
+        }
 
         results.processed++;
         results.files.push({

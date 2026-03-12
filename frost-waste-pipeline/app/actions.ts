@@ -242,7 +242,7 @@ export async function uploadAndEnqueueDocument(formData: FormData) {
 /**
  * AI-PROCESS
  */
-async function processDocument(documentId: string) {
+export async function processDocument(documentId: string) {
   const supabase = createServiceRoleClient();
   const { data: doc } = await supabase.from("documents").select("*").eq("id", documentId).single();
   if (!doc) throw new Error("Dokument hittades inte");
@@ -560,10 +560,10 @@ export async function reVerifyDocument(documentId: string, customInstructions?: 
       await supabase.from("documents").update({
         status,
         extracted_data: {
-          ...adaptiveResult,
-          totalCostSEK: 0,
-          documentType: "waste_report",
+          ...currentData,
           lineItems: mergedLineItems,
+          totalCostSEK: currentData.totalCostSEK ?? 0,
+          documentType: currentData.documentType || "waste_report",
           totalWeightKg,
           uniqueAddresses,
           uniqueReceivers,
@@ -574,6 +574,7 @@ export async function reVerifyDocument(documentId: string, customInstructions?: 
             confidence: adaptiveResult._validation?.confidence ?? (adaptiveResult.metadata?.confidence || 90),
           },
           metadata: {
+            ...(currentData.metadata || {}),
             ...(adaptiveResult.metadata || {}),
             totalRows: mergedLineItems.length,
             extractedRows: mergedLineItems.length,
@@ -625,12 +626,19 @@ export async function reVerifyDocument(documentId: string, customInstructions?: 
       await supabase.from("documents").update({
         status: "needs_review",
         extracted_data: {
-          ...imageResult,
+          ...currentData,
           lineItems: mergedLineItems,
           totalWeightKg,
           uniqueAddresses,
           uniqueReceivers,
           uniqueMaterials,
+          _validation: imageResult._validation || currentData._validation,
+          metadata: {
+            ...(currentData.metadata || {}),
+            ...(imageResult.metadata || {}),
+            totalRows: mergedLineItems.length,
+            extractedRows: mergedLineItems.length,
+          },
           _originalLineItems: currentData._originalLineItems || currentLineItems,
           _processingLog: [
             ...((currentData._processingLog as string[]) || []),
@@ -780,7 +788,7 @@ ${customInstructions ? `
       await supabase.from("documents").update({
         status: "needs_review",
         extracted_data: {
-          ...validatedData,
+          ...currentData,
           lineItems: mergedLineItems,
           totalWeightKg,
           uniqueAddresses,
@@ -792,6 +800,7 @@ ${customInstructions ? `
             confidence,
           },
           metadata: {
+            ...(currentData.metadata || {}),
             ...((validatedData as any).metadata || {}),
             totalRows: mergedLineItems.length,
             extractedRows: mergedLineItems.length,

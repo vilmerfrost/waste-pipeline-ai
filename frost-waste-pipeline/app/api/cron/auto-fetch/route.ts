@@ -171,7 +171,13 @@ export async function GET(request: Request) {
           status: "queued",
         });
 
-        console.log(`✅ Auto-fetcher: Queued ${fileInfo.name} for processing (doc: ${doc.id})`);
+        // Actually trigger document processing
+        try {
+          await processDocument(doc.id);
+          console.log(`✅ Auto-fetcher: Processed ${fileInfo.name} (doc: ${doc.id})`);
+        } catch (processError: any) {
+          console.error(`⚠️ Auto-fetcher: Processing failed for ${fileInfo.name}: ${processError.message}`);
+        }
 
         results.processed++;
         results.files.push({
