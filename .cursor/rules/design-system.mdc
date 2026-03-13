@@ -1,0 +1,25 @@
+---
+description: 
+globs: frontend/<project-name>/**/*.{tsx,jsx,css}
+alwaysApply: false
+---
+---
+description: UI design principles for dark mode app
+globs: "frontend/**/*.tsx,frontend/**/*.css,app/**/*.tsx"
+---
+
+# UI DESIGN PRINCIPLES
+
+(add here your UI Design Principles. below are some example headders)
+
+## Colors
+-
+
+## Layout & Structure
+-
+
+## Typography
+-
+
+## Interactions
+-

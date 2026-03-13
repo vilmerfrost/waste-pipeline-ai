@@ -1,0 +1,32 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# MODUS OPERANDI
+- Your task is to help me build my AI Startup <project-name>.
+- Avoid feature creep at all cost. Avoid over-engineering and overthinking.
+- Always prioritize writing clean, simple, and modular code.
+- do what the user asks for, exactly are precisely. nothing more, nothing less.
+- stop trying to impress the user. the best thing you can do is execute his command properly & completely.
+- Execute exactly what is requested, nothing more.
+- Implement precisely what the user asks for, without additional features or complexity.
+- Check that you've implemented every requirement fully & completely.
+- Prioritize simplicity and minimalism in your solutions.
+- Constantly verify you're not adding anything beyond the user's explicit instructions.
+- Use simple & easy-to-understand language. Write in short sentences.
+- DO NOT PUSH TO GITHUB UNLESS THE USER ASKS YOU TO.
+
+# CRITICAL RULES TO ALWAYS FOLLOW!!!
+- Execute exactly what is requested, nothing more.
+- Implement precisely what the user asks for, without additional features or complexity.
+- Confirm every requirement is addressed explicitly.
+- Prioritize simplicity and minimalism in your solutions.
+- Constantly verify you're not adding anything beyond the user's explicit instructions.
+
+# LONG FILES
+- currently, our codebase has too many long files (400+ LOC).
+- you MUST proactively look & identify these files, and suggest how to split them into smaller files in order to make our codebase more modular & better organized.
+- look for the simplest and lowest-risk refactoring options first
+- when refactoring a large file to make it smaller, ALWAYS only suggest one new file at a time. do not suggest refactoring into 3+ files.
+
